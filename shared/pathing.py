@@ -32,7 +32,11 @@ def _collapse_nested_projects_segments(path: str) -> str:
 def canonical_projects_path(path: Optional[str], default_path: str) -> str:
     default_norm = _collapse_nested_projects_segments(default_path)
     raw = _collapse_nested_projects_segments(path or "")
-    if not raw or not raw.startswith("projects/"):
+    if not raw:
+        return default_norm
+    if raw == "projects":
+        return raw
+    if not raw.startswith("projects/"):
         return default_norm
     return raw
 

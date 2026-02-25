@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -151,7 +152,10 @@ def _normalize_execution_step(
         cmd = filtered[0] if filtered else ""
         low = cmd.lower()
 
-    normalized_cwd = (cwd or ".").strip()
+    raw_cwd = str(cwd or "").strip()
+    normalized_cwd = raw_cwd if raw_cwd else "."
+    if not raw_cwd and re.search(r"\bprojects/[A-Za-z0-9._-]+\b", cmd):
+        normalized_cwd = "projects"
     if normalized_cwd in {"", ".", "./"}:
         normalized_cwd = project_root
     if normalized_cwd.startswith("./"):

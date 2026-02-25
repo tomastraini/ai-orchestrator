@@ -231,6 +231,61 @@ class DevMasterGraphTests(unittest.TestCase):
             )
             self.assertEqual(resolved.replace("\\", "/"), f"{active_root}/src/App.tsx".replace("\\", "/"))
 
+    def test_resolve_target_file_path_uses_file_leaf_for_directory_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            active_root = f"{tmp}/projects/calc"
+            resolved = DevMasterGraph._resolve_target_file_path(
+                scope_root=tmp,
+                project_root="projects/calc",
+                active_project_root=active_root,
+                expected_path_hint="projects/calc/src/components",
+                file_name="src/components/Calculator.tsx",
+            )
+            self.assertEqual(
+                resolved.replace("\\", "/"),
+                f"{active_root}/src/components/Calculator.tsx".replace("\\", "/"),
+            )
+
+    def test_implementation_recovers_when_target_is_directory(self) -> None:
+        graph = DevMasterGraph()
+        plan = {
+            "summary": "Recover implementation target",
+            "project_mode": "new_project",
+            "project_ref": {"name": "calc", "path_hint": "projects/calc"},
+            "stack": {"frontend": "Generic", "backend": None, "language_preferences": ["TypeScript"]},
+            "pm_checklist": {
+                "project_scope": "new_project",
+                "architecture": "frontend_only",
+                "backend_required": "no",
+                "database_required": "no",
+            },
+            "bootstrap_commands": [],
+            "target_files": [
+                {
+                    "file_name": "Calculator.tsx",
+                    "expected_path_hint": "projects/calc/src/components",
+                    "modification_type": "create",
+                    "details": "create calculator component",
+                }
+            ],
+            "constraints": ["none"],
+            "validation": ["python -c \"print('ok')\""],
+            "clarification_summary": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "calc", "src", "components", "Calculator.tsx"), exist_ok=True)
+            state = graph.run(
+                request_id="impl-recover-dir-target-1",
+                plan=plan,
+                scope_root=tmp,
+                ask_user=lambda _: "n/a",
+            )
+        self.assertEqual(state["status"], "completed", msg=str(state.get("errors", [])))
+        self.assertTrue(
+            any("[IMPLEMENTATION_RECOVERY]" in line for line in state.get("logs", [])),
+            msg=str(state.get("logs", [])),
+        )
+
     def test_root_resolution_prefers_nested_marker_based_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             outer = os.path.join(tmp, "calculator-react")

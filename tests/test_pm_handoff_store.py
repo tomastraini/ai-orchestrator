@@ -103,6 +103,20 @@ class PMHandoffStoreTests(unittest.TestCase):
         step = handoff["execution_steps"][0]
         self.assertIn("npm init vite@latest .", step["command"])
 
+    def test_handoff_normalizes_empty_cwd_for_scaffold_target(self) -> None:
+        plan = self._sample_plan()
+        plan["bootstrap_commands"] = [
+            {
+                "cwd": "",
+                "command": "npx create-react-app projects/calculator --template typescript",
+                "purpose": "bootstrap frontend",
+            }
+        ]
+        handoff = build_dev_handoff(request_id="req-handoff-4", plan=plan, rounds=[])
+        self.assertEqual(len(handoff.get("execution_steps", [])), 1)
+        step = handoff["execution_steps"][0]
+        self.assertEqual(step["cwd"], "projects")
+
 
 if __name__ == "__main__":
     unittest.main()

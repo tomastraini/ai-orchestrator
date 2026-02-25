@@ -157,6 +157,44 @@ def _normalize_existing_project_plan(
     return plan
 
 
+def _looks_like_scaffold_command(command: str) -> bool:
+    low = (command or "").lower()
+    return (
+        "create-react-app" in low
+        or "create-vite" in low
+        or ("npm create" in low and "vite" in low)
+        or ("npm init" in low and "vite" in low)
+        or ("dotnet new" in low)
+    )
+
+
+def _normalize_bootstrap_commands(plan: Dict[str, Any]) -> Dict[str, Any]:
+    commands = plan.get("bootstrap_commands")
+    if not isinstance(commands, list):
+        return plan
+    project_ref = plan.get("project_ref") if isinstance(plan.get("project_ref"), dict) else {}
+    project_name = str(project_ref.get("name") or "project").strip()
+    project_root = _ensure_projects_rooted_path(project_ref.get("path_hint"), project_name)
+    normalized: List[Dict[str, str]] = []
+    for raw in commands:
+        if not isinstance(raw, dict):
+            continue
+        cwd = str(raw.get("cwd", "")).strip()
+        command = str(raw.get("command", "")).strip()
+        purpose = str(raw.get("purpose", "bootstrap")).strip() or "bootstrap"
+        if not cwd:
+            if _looks_like_scaffold_command(command) and re.search(r"\bprojects/[A-Za-z0-9._-]+\b", command):
+                cwd = "projects"
+            elif _looks_like_scaffold_command(command):
+                cwd = project_root
+            else:
+                cwd = project_root
+        cwd = canonical_projects_path(cwd, project_root)
+        normalized.append({"cwd": cwd, "command": command, "purpose": purpose})
+    plan["bootstrap_commands"] = normalized
+    return plan
+
+
 def _extract_output_text(response: Any) -> str:
     content = None
     for item in response.output:
@@ -438,6 +476,7 @@ def create_plan(
         }
         plan = _normalize_new_project_plan(plan, checklist)
         plan = _normalize_existing_project_plan(plan, preselected_project_ref)
+        plan = _normalize_bootstrap_commands(plan)
         ok, errors = validate_plan_json(plan, requirement=requirement)
         if not ok:
             raise PMServiceError(

@@ -129,6 +129,44 @@ class PMMandatoryChecklistTests(unittest.TestCase):
         self.assertEqual(plan["pm_checklist"]["backend_required"], "no")
         self.assertEqual(plan["pm_checklist"]["database_required"], "no")
 
+    def test_empty_bootstrap_cwd_is_normalized_before_validation(self) -> None:
+        asked: list[str] = []
+
+        def ask_user(question: str, _round_index: int, _max_rounds: int) -> str:
+            asked.append(question)
+            return "n/a"
+
+        original = pm_service._request_model_decision
+
+        def fake_request(*args, **kwargs):  # type: ignore[no-untyped-def]
+            plan = _final_plan_stub()
+            plan["bootstrap_commands"][0]["cwd"] = ""
+            plan["bootstrap_commands"][0]["command"] = (
+                "npm create vite@latest projects/calculator -- --template react-ts"
+            )
+            return {
+                "status": "final_plan",
+                "question": "",
+                "hypothesis": {"project_mode": "new_project"},
+                "plan": plan,
+            }
+
+        pm_service._request_model_decision = fake_request
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                store = PMContextStore(repo_root=tmp)
+                plan = pm_service.create_plan(
+                    requirement="Create a calculator",
+                    request_id="req-checklist-empty-cwd",
+                    context_store=store,
+                    ask_user=ask_user,
+                    max_rounds=1,
+                )
+        finally:
+            pm_service._request_model_decision = original
+
+        self.assertEqual(plan["bootstrap_commands"][0]["cwd"], "projects")
+
 
 if __name__ == "__main__":
     unittest.main()

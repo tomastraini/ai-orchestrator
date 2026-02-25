@@ -1192,6 +1192,8 @@ class DevMasterGraph:
             rel = project_root_norm.split("/", 1)[1] if project_root_norm.startswith("projects/") else project_root_norm
             base_root = os.path.abspath(os.path.join(scope_abs, rel))
 
+        file_name_norm = file_name_norm.replace("\\", "/").strip().lstrip("./")
+        file_leaf = os.path.basename(file_name_norm) if file_name_norm else ""
         rel_path = expected_norm
         if expected_norm.startswith("projects/"):
             parts = [p for p in expected_norm.split("/") if p]
@@ -1208,8 +1210,14 @@ class DevMasterGraph:
         elif not rel_path:
             rel_path = file_name_norm
 
-        if not rel_path and file_name_norm:
-            rel_path = file_name_norm
+        if not rel_path and file_leaf:
+            rel_path = file_leaf
+
+        expected_has_extension = bool(os.path.splitext(rel_path)[1]) if rel_path else False
+        if rel_path and not expected_has_extension and file_leaf:
+            rel_parts = [p for p in rel_path.replace("\\", "/").split("/") if p]
+            if not rel_parts or rel_parts[-1] != file_leaf:
+                rel_path = "/".join(rel_parts + [file_leaf]) if rel_parts else file_leaf
 
         safe_path = os.path.abspath(os.path.join(base_root, rel_path))
         if os.path.commonpath([scope_abs, safe_path]) != scope_abs:
@@ -1292,6 +1300,8 @@ class DevMasterGraph:
             return "ensured_path", f"pass={pass_index}", safe_target
 
         os.makedirs(os.path.dirname(safe_target), exist_ok=True)
+        if os.path.isdir(safe_target):
+            return "path_type_mismatch", "target_is_directory", safe_target
         update_like = modification_type in {"update", "replace", "modify", "patch"}
         if update_like and not os.path.exists(safe_target):
             discovered = DevMasterGraph._discover_existing_path(active_root, expected_path_hint, file_name)
@@ -1381,7 +1391,8 @@ class DevMasterGraph:
                     expected = str(target.get("expected_path_hint", ""))
                     modification_type = str(target.get("modification_type", "")).lower()
                     details = str(target.get("details", "")).strip()
-                    file_name = str(target.get("file_name", "")).strip() or os.path.basename(expected)
+                    raw_file_name = str(target.get("file_name", "")).strip()
+                    file_name = os.path.basename(raw_file_name.replace("\\", "/")) if raw_file_name else os.path.basename(expected)
                     safe_target = DevMasterGraph._resolve_target_file_path(
                         scope_root=scope_root,
                         project_root=project_root,
@@ -1401,8 +1412,42 @@ class DevMasterGraph:
                         pass_index=pass_index,
                         expected_path_hint=expected,
                     )
+                    if action == "path_type_mismatch":
+                        recovered_target = os.path.join(resolved_target, file_name) if file_name else resolved_target
+                        DevMasterGraph._emit(
+                            state,
+                            f"[IMPLEMENTATION_RECOVERY] pass={pass_index} reason={action_note} "
+                            f"old_target={resolved_target} new_target={recovered_target}",
+                        )
+                        action, action_note, resolved_target = DevMasterGraph._apply_target_in_pass(
+                            safe_target=recovered_target,
+                            file_name=file_name,
+                            active_root=active_root,
+                            modification_type=modification_type,
+                            details=details,
+                            pass_index=pass_index,
+                            expected_path_hint=expected,
+                        )
                     if action == "missing_expected_file":
-                        raise RuntimeError(f"Expected target missing and discovery failed: {expected}")
+                        discovered = DevMasterGraph._discover_existing_path(active_root, expected, file_name)
+                        if not discovered:
+                            raise RuntimeError(f"Expected target missing and discovery failed: {expected}")
+                        DevMasterGraph._emit(
+                            state,
+                            f"[IMPLEMENTATION_RECOVERY] pass={pass_index} reason=discovered_target "
+                            f"old_target={resolved_target} new_target={discovered}",
+                        )
+                        action, action_note, resolved_target = DevMasterGraph._apply_target_in_pass(
+                            safe_target=discovered,
+                            file_name=file_name,
+                            active_root=active_root,
+                            modification_type=modification_type,
+                            details=details,
+                            pass_index=pass_index,
+                            expected_path_hint=expected,
+                        )
+                        if action == "missing_expected_file":
+                            raise RuntimeError(f"Expected target missing and discovery failed: {expected}")
                     target_proofs[key]["after_hash"] = DevMasterGraph._file_sha1(resolved_target)
                     state["touched_paths"].append(resolved_target)
                     DevMasterGraph._emit(
