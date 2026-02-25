@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 
@@ -202,6 +203,43 @@ class DevMasterGraphTests(unittest.TestCase):
                 file_name="App.tsx",
             )
             self.assertEqual(resolved.replace("\\", "/"), f"{active_root}/src/App.tsx".replace("\\", "/"))
+
+    def test_root_resolution_prefers_nested_marker_based_project(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            outer = os.path.join(tmp, "calculator-react")
+            inner = os.path.join(outer, "calculator-react")
+            os.makedirs(os.path.join(inner, "src"), exist_ok=True)
+            with open(os.path.join(inner, "package.json"), "w", encoding="utf-8") as fh:
+                fh.write("{}")
+
+            state = {
+                "scope_root": tmp,
+                "project_root": "projects/calculator-react",
+                "project_name": "calculator-react",
+                "active_project_root": outer,
+                "implementation_targets": [
+                    {
+                        "file_name": "src/App.jsx",
+                        "expected_path_hint": "projects/calculator-react/src/App.jsx",
+                    }
+                ],
+                "touched_paths": [outer, inner],
+            }
+            evidence = DevMasterGraph._resolve_active_project_root_after_bootstrap(
+                state=state,  # type: ignore[arg-type]
+                attempt_history=[
+                    {
+                        "stdout": f"Scaffolding project in {inner}...",
+                        "stderr": "",
+                        "cwd": outer,
+                    }
+                ],
+            )
+            self.assertEqual(
+                str(evidence.get("selected_root", "")).replace("\\", "/"),
+                inner.replace("\\", "/"),
+            )
+            self.assertGreaterEqual(int(evidence.get("confidence", 0)), 45)
 
 
 if __name__ == "__main__":

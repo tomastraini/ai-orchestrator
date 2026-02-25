@@ -59,6 +59,13 @@ class DevExecutorTests(unittest.TestCase):
         )
         self.assertIn("npm create vite@latest .", vite)
 
+    def test_deterministic_rewrite_normalizes_vite_target_for_npm_init(self) -> None:
+        vite = rewrite_command_deterministic(
+            "npm init vite@latest projects/react-calculator -- --template react",
+            "path_issue",
+        )
+        self.assertIn("npm init vite@latest .", vite)
+
     def test_retry_budget_exhaustion_without_llm_reserve(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tasks = [

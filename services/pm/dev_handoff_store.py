@@ -91,7 +91,13 @@ def _normalize_execution_step(
 ) -> Dict[str, str]:
     def _relativize_scaffold_target(token: str, cwd_norm: str, project_root_norm: str) -> str:
         target = token.strip().replace("\\", "/").lstrip("./")
+        project_name = project_root_norm.split("/")[-1] if project_root_norm else ""
+        cwd_name = cwd_norm.split("/")[-1] if cwd_norm else ""
         if not target.startswith("projects/"):
+            if project_name and cwd_norm == project_root_norm and target == project_name:
+                return "."
+            if cwd_name and target == cwd_name:
+                return "."
             return token
         if target == cwd_norm or target == project_root_norm:
             return "."
@@ -120,9 +126,9 @@ def _normalize_execution_step(
                 if "create-vite" in tok and len(tokens) > i + 1 and not tokens[i + 1].startswith("-"):
                     tokens[i + 1] = _relativize_scaffold_target(tokens[i + 1], cwd_norm, project_root_norm)
                     return " ".join(tokens)
-        if "create" in low_tokens and any("vite" in t for t in low_tokens):
+        if ("create" in low_tokens or "init" in low_tokens) and any("vite" in t for t in low_tokens):
             for i, tok in enumerate(low_tokens):
-                if tok == "create" and len(tokens) > i + 2 and "vite" in low_tokens[i + 1]:
+                if (tok == "create" or tok == "init") and len(tokens) > i + 2 and "vite" in low_tokens[i + 1]:
                     if not tokens[i + 2].startswith("-"):
                         tokens[i + 2] = _relativize_scaffold_target(tokens[i + 2], cwd_norm, project_root_norm)
                         return " ".join(tokens)

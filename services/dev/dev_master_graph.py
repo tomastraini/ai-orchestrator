@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import platform
 import re
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
@@ -50,6 +50,8 @@ class DevGraphState(TypedDict, total=False):
     implementation_pass_statuses: List[str]
     log_sink: Any
     validation_status: str
+    root_resolution_evidence: Dict[str, Any]
+    llm_context_contract: Dict[str, Any]
 
 
 class DevMasterGraph:
@@ -67,6 +69,18 @@ class DevMasterGraph:
         "bash ",
         "sh ",
     )
+    PROJECT_MARKER_FILES = (
+        "package.json",
+        "pyproject.toml",
+        "requirements.txt",
+        "Pipfile",
+        "Gemfile",
+        "Cargo.toml",
+        "go.mod",
+        "pom.xml",
+        "composer.json",
+    )
+    SOURCE_DIR_HINTS = ("src", "app", "lib")
 
     def __init__(self) -> None:
         graph = StateGraph(DevGraphState)
@@ -145,6 +159,8 @@ class DevMasterGraph:
             },
             "implementation_pass_statuses": [],
             "log_sink": log_sink,
+            "root_resolution_evidence": {},
+            "llm_context_contract": {},
         }
         result = self._compiled_graph.invoke(initial_state)
         result.pop("ask_user", None)
@@ -403,6 +419,225 @@ class DevMasterGraph:
         return state
 
     @staticmethod
+    def _is_within_scope(scope_root: str, candidate_path: str) -> bool:
+        try:
+            scope_abs = os.path.abspath(scope_root)
+            cand_abs = os.path.abspath(candidate_path)
+            return os.path.commonpath([scope_abs, cand_abs]) == scope_abs
+        except Exception:
+            return False
+
+    @staticmethod
+    def _has_project_marker(path: str) -> bool:
+        if not os.path.isdir(path):
+            return False
+        try:
+            names = set(os.listdir(path))
+        except Exception:
+            return False
+        if any(marker in names for marker in DevMasterGraph.PROJECT_MARKER_FILES):
+            return True
+        return any(name.endswith(".csproj") or name.endswith(".sln") for name in names)
+
+    @staticmethod
+    def _source_hint_count(path: str) -> int:
+        if not os.path.isdir(path):
+            return 0
+        count = 0
+        for name in DevMasterGraph.SOURCE_DIR_HINTS:
+            if os.path.isdir(os.path.join(path, name)):
+                count += 1
+        return count
+
+    @staticmethod
+    def _normalize_target_tail(expected_path_hint: str, project_name: str) -> str:
+        normalized = (expected_path_hint or "").replace("\\", "/").strip().lstrip("./")
+        if normalized.startswith("projects/"):
+            parts = [p for p in normalized.split("/") if p]
+            if len(parts) >= 3:
+                if project_name and parts[1] != project_name:
+                    return "/".join(parts[2:])
+                return "/".join(parts[2:])
+            return ""
+        return normalized
+
+    @staticmethod
+    def _resolve_active_project_root_after_bootstrap(
+        *,
+        state: DevGraphState,
+        attempt_history: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        scope_root = str(state.get("scope_root", "")).strip()
+        project_root = str(state.get("project_root", "")).strip()
+        project_name = str(state.get("project_name", "")).strip()
+        active_root = str(state.get("active_project_root", "")).strip()
+        if not scope_root:
+            return {"selected_root": active_root, "confidence": 0, "candidates": [], "ambiguous": False}
+
+        scope_abs = os.path.abspath(scope_root)
+        expected_tails = [
+            DevMasterGraph._normalize_target_tail(str(t.get("expected_path_hint", "")), project_name)
+            for t in state.get("implementation_targets", [])
+            if isinstance(t, dict)
+        ]
+        expected_tails = [x for x in expected_tails if x]
+
+        score_map: Dict[str, int] = {}
+        reasons_map: Dict[str, List[str]] = {}
+
+        def _add_candidate(path: str, score: int, reason: str) -> None:
+            if not path:
+                return
+            cand_abs = os.path.abspath(path)
+            if not DevMasterGraph._is_within_scope(scope_abs, cand_abs):
+                return
+            if not os.path.isdir(cand_abs):
+                return
+            score_map[cand_abs] = score_map.get(cand_abs, 0) + int(score)
+            reasons_map.setdefault(cand_abs, []).append(reason)
+
+        # Seed candidates from known roots/cwds.
+        if active_root:
+            _add_candidate(active_root, 25, "initial_active_root")
+        if project_root:
+            rel = project_root.split("/", 1)[1] if project_root.startswith("projects/") else project_root
+            _add_candidate(os.path.join(scope_abs, rel), 15, "project_root_hint")
+
+        # Parse stdout/stderr for path evidence.
+        regexes = [
+            r"Success!\s+Created\s+.+?\s+at\s+([^\r\n]+)",
+            r"Scaffolding project in\s+([^\r\n]+)",
+            r"Created project at\s+([^\r\n]+)",
+            r"Project created at\s+([^\r\n]+)",
+        ]
+        for attempt in attempt_history:
+            blob = f"{attempt.get('stdout', '')}\n{attempt.get('stderr', '')}"
+            for pattern in regexes:
+                for m in re.finditer(pattern, blob, flags=re.IGNORECASE):
+                    candidate = m.group(1).strip().rstrip(".")
+                    _add_candidate(candidate, 90, f"stdout_pattern:{pattern}")
+            attempt_cwd = str(attempt.get("cwd", "")).strip()
+            if attempt_cwd:
+                _add_candidate(attempt_cwd, 12, "attempt_cwd")
+
+        for touched in state.get("touched_paths", []):
+            if isinstance(touched, str):
+                _add_candidate(touched, 10, "touched_path")
+
+        # Scan immediate and nested directories for marker evidence.
+        search_roots: Set[str] = set()
+        for base in list(score_map.keys()):
+            search_roots.add(base)
+            parent = os.path.dirname(base)
+            if parent and DevMasterGraph._is_within_scope(scope_abs, parent):
+                search_roots.add(parent)
+
+        ignore_dirs = {"node_modules", ".git", ".venv", "__pycache__", "dist", "build", ".next", ".cache"}
+        for search_root in list(search_roots):
+            if not os.path.isdir(search_root):
+                continue
+            for root, dirs, _files in os.walk(search_root):
+                dirs[:] = [d for d in dirs if d not in ignore_dirs]
+                depth = os.path.relpath(root, search_root).count(os.sep)
+                if depth > 3:
+                    dirs[:] = []
+                    continue
+                if DevMasterGraph._has_project_marker(root):
+                    _add_candidate(root, max(40, 70 - (depth * 10)), f"marker_depth:{depth}")
+                hints = DevMasterGraph._source_hint_count(root)
+                if hints:
+                    _add_candidate(root, hints * 6, f"source_hints:{hints}")
+
+        for candidate in list(score_map.keys()):
+            base = os.path.basename(candidate.rstrip("/\\"))
+            if project_name and base == project_name:
+                _add_candidate(candidate, 8, "basename_matches_project")
+            if expected_tails:
+                matches = 0
+                for tail in expected_tails:
+                    if os.path.exists(os.path.join(candidate, tail)):
+                        matches += 1
+                if matches:
+                    _add_candidate(candidate, matches * 20, f"target_tail_matches:{matches}")
+
+        ranked = sorted(score_map.items(), key=lambda kv: kv[1], reverse=True)
+        candidates = [
+            {"path": path, "score": score, "reasons": reasons_map.get(path, [])}
+            for path, score in ranked
+        ]
+        if not candidates:
+            return {
+                "selected_root": active_root,
+                "confidence": 0,
+                "candidates": [],
+                "ambiguous": False,
+            }
+
+        top = candidates[0]
+        second_score = candidates[1]["score"] if len(candidates) > 1 else -999
+        confidence = int(top["score"])
+        ambiguous = len(candidates) > 1 and confidence < 60 and (top["score"] - second_score) < 10
+        return {
+            "selected_root": top["path"],
+            "confidence": confidence,
+            "candidates": candidates[:5],
+            "ambiguous": ambiguous,
+        }
+
+    @staticmethod
+    def _build_llm_context_contract(state: DevGraphState) -> Dict[str, Any]:
+        scope_root = str(state.get("scope_root", "")).strip()
+        resolved_root = str(state.get("active_project_root", "")).strip()
+        project_name = str(state.get("project_name", "")).strip()
+        root_evidence = state.get("root_resolution_evidence", {}) if isinstance(state.get("root_resolution_evidence"), dict) else {}
+        normalized_targets: List[Dict[str, str]] = []
+        for target in state.get("implementation_targets", []):
+            if not isinstance(target, dict):
+                continue
+            expected = str(target.get("expected_path_hint", ""))
+            file_name = str(target.get("file_name", ""))
+            resolved = ""
+            try:
+                resolved = DevMasterGraph._resolve_target_file_path(
+                    scope_root=scope_root,
+                    project_root=str(state.get("project_root", "")),
+                    active_project_root=resolved_root,
+                    expected_path_hint=expected,
+                    file_name=file_name,
+                )
+            except Exception:
+                resolved = ""
+            normalized_targets.append(
+                {
+                    "expected_path_hint": expected,
+                    "file_name": file_name,
+                    "resolved_absolute_path": resolved,
+                }
+            )
+
+        tree_snapshot: List[str] = []
+        if resolved_root and os.path.isdir(resolved_root):
+            try:
+                entries = sorted(os.listdir(resolved_root))[:30]
+                tree_snapshot = entries
+            except Exception:
+                tree_snapshot = []
+
+        return {
+            "scope_root": scope_root,
+            "resolved_active_root": resolved_root,
+            "project_name": project_name,
+            "candidate_roots": root_evidence.get("candidates", []),
+            "root_confidence": root_evidence.get("confidence", 0),
+            "path_aliases": {
+                "project_root": str(state.get("project_root", "")),
+                "active_project_root": resolved_root,
+            },
+            "normalized_targets": normalized_targets,
+            "active_root_tree_snapshot": tree_snapshot,
+        }
+
+    @staticmethod
     def _execute_bootstrap_phase(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "execute_bootstrap_phase"
         DevMasterGraph._emit(state, "[PHASE_START] execute_bootstrap_phase")
@@ -437,11 +672,52 @@ class DevMasterGraph:
             return state
 
         if pending_llm_task is None:
-            # Resolve actual scaffold root from bootstrap output when tools create nested folders.
-            state["active_project_root"] = DevMasterGraph._resolve_active_project_root_after_bootstrap(
+            root_evidence = DevMasterGraph._resolve_active_project_root_after_bootstrap(
                 state=state,
                 attempt_history=state.get("attempt_history", []),
             )
+            state["root_resolution_evidence"] = root_evidence
+            selected_root = str(root_evidence.get("selected_root", "")).strip()
+            confidence = int(root_evidence.get("confidence", 0))
+            ambiguous = bool(root_evidence.get("ambiguous", False))
+            candidates = root_evidence.get("candidates", [])
+            existing_root = str(state.get("active_project_root", "")).strip()
+            trusted_existing = bool(existing_root and os.path.abspath(existing_root) == os.path.abspath(selected_root))
+            DevMasterGraph._emit(state, f"[ROOT_EVIDENCE] confidence={confidence} candidates={candidates}")
+            if (confidence < 45 or ambiguous) and not trusted_existing and len(candidates) >= 2 and callable(state.get("ask_user")):
+                c1 = str(candidates[0].get("path", ""))
+                c2 = str(candidates[1].get("path", ""))
+                question = (
+                    "Detected multiple possible project roots. Choose 1 or 2:\n"
+                    f"1) {c1}\n"
+                    f"2) {c2}"
+                )
+                answer = str(state.get("ask_user")(question)).strip().lower()
+                if answer in {"1", "a"}:
+                    selected_root = c1
+                elif answer in {"2", "b"}:
+                    selected_root = c2
+                elif c1.lower() in answer:
+                    selected_root = c1
+                elif c2.lower() in answer:
+                    selected_root = c2
+                else:
+                    state["errors"].append("[ROOT] unresolved root ambiguity from CLI answer.")
+                    state["status"] = "bootstrap_failed"
+                    state["bootstrap_status"] = "failed"
+                    state["last_error"] = state["errors"][-1]
+                    state["phase_status"]["execute_bootstrap_phase"] = "failed"
+                    return state
+            elif confidence < 45 and not trusted_existing and not callable(state.get("ask_user")):
+                state["errors"].append("[ROOT] low confidence active root resolution without CLI clarification.")
+                state["status"] = "bootstrap_failed"
+                state["bootstrap_status"] = "failed"
+                state["last_error"] = state["errors"][-1]
+                state["phase_status"]["execute_bootstrap_phase"] = "failed"
+                return state
+
+            state["active_project_root"] = selected_root
+            state["llm_context_contract"] = DevMasterGraph._build_llm_context_contract(state)
             DevMasterGraph._emit(state, f"[ROOT] active_project_root={state.get('active_project_root')}")
             state["bootstrap_status"] = "completed"
             DevMasterGraph._emit(
@@ -485,6 +761,8 @@ class DevMasterGraph:
             "attempted_commands": pending_llm_task.get("attempted_commands", []),
             "scope_constraint": "All commands must remain within ./projects scope.",
             "push_constraint": "git push is blocked.",
+            "execution_context": state.get("llm_context_contract", {}),
+            "root_resolution_evidence": state.get("root_resolution_evidence", {}),
         }
         try:
             state["llm_calls_used"] = int(state.get("llm_calls_used", 0)) + 1
@@ -531,9 +809,16 @@ class DevMasterGraph:
             state["phase_status"]["execute_bootstrap_phase"] = "failed"
             return state
         state["bootstrap_status"] = "completed"
-        state["active_project_root"] = DevMasterGraph._resolve_active_project_root_after_bootstrap(
+        root_evidence = DevMasterGraph._resolve_active_project_root_after_bootstrap(
             state=state,
             attempt_history=state.get("attempt_history", []),
+        )
+        state["root_resolution_evidence"] = root_evidence
+        state["active_project_root"] = str(root_evidence.get("selected_root", state.get("active_project_root", ""))).strip()
+        state["llm_context_contract"] = DevMasterGraph._build_llm_context_contract(state)
+        DevMasterGraph._emit(
+            state,
+            f"[ROOT_EVIDENCE] confidence={root_evidence.get('confidence', 0)} candidates={root_evidence.get('candidates', [])}",
         )
         DevMasterGraph._emit(state, f"[ROOT] active_project_root={state.get('active_project_root')}")
         DevMasterGraph._emit(
@@ -543,30 +828,6 @@ class DevMasterGraph:
         state["phase_status"]["execute_bootstrap_phase"] = "completed"
         return state
 
-    @staticmethod
-    def _resolve_active_project_root_after_bootstrap(
-        *,
-        state: DevGraphState,
-        attempt_history: List[Dict[str, Any]],
-    ) -> str:
-        active_root = str(state.get("active_project_root", "")).strip()
-        scope_root = str(state.get("scope_root", "")).strip()
-        if not scope_root:
-            return active_root
-
-        success_paths: List[str] = []
-        for attempt in attempt_history:
-            stdout = str(attempt.get("stdout", ""))
-            m = re.search(r"Success!\s+Created\s+.+?\s+at\s+([^\r\n]+)", stdout)
-            if m:
-                success_paths.append(m.group(1).strip())
-        for candidate in reversed(success_paths):
-            cand_abs = os.path.abspath(candidate)
-            if os.path.commonpath([os.path.abspath(scope_root), cand_abs]) == os.path.abspath(scope_root):
-                return cand_abs
-        return active_root
-
-    @staticmethod
     def _resolve_implementation_path(scope_root: str, project_root: str, expected_path_hint: str) -> str:
         path = (expected_path_hint or "").replace("\\", "/").strip().lstrip("./")
         if path.startswith("projects/"):
@@ -750,6 +1011,8 @@ class DevMasterGraph:
         if not active_root:
             rel = project_root.split("/", 1)[1] if project_root.startswith("projects/") else project_root
             active_root = os.path.join(scope_root, rel)
+        state["llm_context_contract"] = DevMasterGraph._build_llm_context_contract(state)
+        DevMasterGraph._emit(state, f"[CONTEXT] active_root={active_root}")
         targets = state.get("implementation_targets", [])
         total_actions = 0
         try:
@@ -840,6 +1103,21 @@ class DevMasterGraph:
             state["phase_status"]["execute_validation_phase"] = "completed"
             DevMasterGraph._emit(state, "[VALIDATION] no executable validations; marked completed")
             return state
+
+        active_root = str(state.get("active_project_root", "")).strip()
+        if active_root:
+            validation_tasks = [
+                DevTask(
+                    id=task.id,
+                    description=task.description,
+                    command=task.command,
+                    cwd=active_root,
+                    kind=task.kind,
+                )
+                for task in validation_tasks
+            ]
+            DevMasterGraph._emit(state, f"[VALIDATION] reconciled task cwd to active root {active_root}")
+        state["llm_context_contract"] = DevMasterGraph._build_llm_context_contract(state)
 
         logs, touched_paths, errors, attempt_history, pending = execute_dev_tasks(
             validation_tasks,

@@ -159,7 +159,7 @@ def rewrite_command_deterministic(command: str, category: str, stack_hint: str =
             cmd = f"{cmd} --use-npm"
         return cmd
 
-    if "create-vite" in low or ("npm create" in low and "vite" in low):
+    if "create-vite" in low or ("npm create" in low and "vite" in low) or ("npm init" in low and "vite" in low):
         parts = cmd.split()
         target_idx = -1
         if any("create-vite" in tok.lower() for tok in parts):
@@ -171,7 +171,7 @@ def rewrite_command_deterministic(command: str, category: str, stack_hint: str =
         else:
             # npm create vite@latest <target> -- --template react-ts
             for i, tok in enumerate(parts):
-                if tok.lower() == "create" and len(parts) > i + 2:
+                if (tok.lower() == "create" or tok.lower() == "init") and len(parts) > i + 2:
                     candidate_tool = parts[i + 1].lower()
                     candidate_target = parts[i + 2]
                     if "vite" in candidate_tool and not candidate_target.startswith("-"):
