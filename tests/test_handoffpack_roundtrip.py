@@ -61,6 +61,8 @@ class HandoffPackRoundTripTests(unittest.TestCase):
             self.assertIsNotNone(loaded)
             self.assertEqual(str(loaded.get("project_root")), "projects/calculator")
             self.assertIn("execution_steps", loaded)
+            self.assertIn("internal_checklist", loaded)
+            self.assertEqual(loaded.get("internal_checklist"), [])
 
 
 if __name__ == "__main__":

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 import re
+from dataclasses import asdict
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
 from services.dev.dev_executor import execute_dev_tasks, execute_single_recovery_command
 from services.workspace.project_index import detect_stack_from_markers
-from shared.dev_schemas import DevTask, derive_project_name
+from shared.dev_schemas import DevChecklistItem, DevTask, derive_project_name
 
 
 DevAskFn = Callable[[str], str]
@@ -52,6 +54,12 @@ class DevGraphState(TypedDict, total=False):
     validation_status: str
     root_resolution_evidence: Dict[str, Any]
     llm_context_contract: Dict[str, Any]
+    internal_checklist: List[Dict[str, Any]]
+    checklist_index: Dict[str, int]
+    final_compile_tasks: List[DevTask]
+    final_compile_status: str
+    task_outcomes: List[Dict[str, Any]]
+    checklist_cursor: str
 
 
 class DevMasterGraph:
@@ -92,6 +100,7 @@ class DevMasterGraph:
         graph.add_node("execute_bootstrap_phase", self._execute_bootstrap_phase)
         graph.add_node("execute_implementation_phase", self._execute_implementation_phase)
         graph.add_node("execute_validation_phase", self._execute_validation_phase)
+        graph.add_node("execute_final_compile_gate", self._execute_final_compile_gate)
         graph.add_node("finalize_result", self._finalize_result)
 
         graph.add_edge(START, "ingest_pm_plan")
@@ -102,7 +111,8 @@ class DevMasterGraph:
         graph.add_edge("prepare_execution_steps", "execute_bootstrap_phase")
         graph.add_edge("execute_bootstrap_phase", "execute_implementation_phase")
         graph.add_edge("execute_implementation_phase", "execute_validation_phase")
-        graph.add_edge("execute_validation_phase", "finalize_result")
+        graph.add_edge("execute_validation_phase", "execute_final_compile_gate")
+        graph.add_edge("execute_final_compile_gate", "finalize_result")
         graph.add_edge("finalize_result", END)
         self._compiled_graph = graph.compile()
 
@@ -141,9 +151,15 @@ class DevMasterGraph:
             "bootstrap_status": "pending",
             "implementation_status": "pending",
             "validation_status": "pending",
+            "final_compile_status": "pending",
             "active_project_root": "",
             "detected_stacks": [],
             "dev_preflight_plan": {},
+            "final_compile_tasks": [],
+            "internal_checklist": [],
+            "checklist_index": {},
+            "task_outcomes": [],
+            "checklist_cursor": "",
             "llm_calls_used": 0,
             "llm_call_budget": max(0, int(max_model_calls_per_run)),
             "phase_status": {
@@ -155,6 +171,7 @@ class DevMasterGraph:
                 "execute_bootstrap_phase": "pending",
                 "execute_implementation_phase": "pending",
                 "execute_validation_phase": "pending",
+                "execute_final_compile_gate": "pending",
                 "finalize_result": "pending",
             },
             "implementation_pass_statuses": [],
@@ -179,10 +196,184 @@ class DevMasterGraph:
                 pass
 
     @staticmethod
+    def _reindex_checklist(state: DevGraphState) -> None:
+        checklist = state.get("internal_checklist", [])
+        state["checklist_index"] = {
+            str(item.get("id", "")): idx
+            for idx, item in enumerate(checklist)
+            if isinstance(item, dict) and str(item.get("id", "")).strip()
+        }
+
+    @staticmethod
+    def _upsert_checklist_item(state: DevGraphState, item: DevChecklistItem) -> None:
+        checklist = state.get("internal_checklist", [])
+        index = state.get("checklist_index", {})
+        payload = asdict(item)
+        item_id = item.id
+        if item_id in index:
+            checklist[index[item_id]] = payload
+        else:
+            checklist.append(payload)
+        state["internal_checklist"] = checklist
+        DevMasterGraph._reindex_checklist(state)
+
+    @staticmethod
+    def _find_checklist_item(state: DevGraphState, item_id: str) -> Optional[Dict[str, Any]]:
+        idx = state.get("checklist_index", {}).get(item_id)
+        if idx is None:
+            return None
+        checklist = state.get("internal_checklist", [])
+        if idx < 0 or idx >= len(checklist):
+            return None
+        item = checklist[idx]
+        return item if isinstance(item, dict) else None
+
+    @staticmethod
+    def _append_item_evidence(item: Dict[str, Any], evidence: Optional[Dict[str, Any]]) -> None:
+        if not evidence:
+            return
+        current = item.get("evidence")
+        if not isinstance(current, list):
+            current = []
+        current.append(evidence)
+        item["evidence"] = current
+
+    @staticmethod
+    def _set_checklist_status(
+        state: DevGraphState,
+        item_id: str,
+        status: str,
+        *,
+        evidence: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        item = DevMasterGraph._find_checklist_item(state, item_id)
+        if not item:
+            return
+        item["status"] = status
+        DevMasterGraph._append_item_evidence(item, evidence)
+        state["checklist_cursor"] = item_id
+        DevMasterGraph._emit(
+            state,
+            f"[CHECKLIST] item={item_id} status={status}",
+        )
+
+    @staticmethod
+    def _next_actionable_checklist_item(state: DevGraphState) -> Optional[Dict[str, Any]]:
+        checklist = state.get("internal_checklist", [])
+        completed = {
+            str(item.get("id", ""))
+            for item in checklist
+            if isinstance(item, dict) and str(item.get("status", "")) == "completed"
+        }
+        for item in checklist:
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status", "pending"))
+            if status in {"completed", "failed"}:
+                continue
+            deps = item.get("depends_on", [])
+            if isinstance(deps, list) and any(str(dep) not in completed for dep in deps):
+                continue
+            return item
+        return None
+
+    @staticmethod
+    def _all_mandatory_checklist_items_completed(state: DevGraphState) -> bool:
+        for item in state.get("internal_checklist", []):
+            if not isinstance(item, dict):
+                continue
+            if not bool(item.get("mandatory", True)):
+                continue
+            if str(item.get("status", "")) != "completed":
+                return False
+        return True
+
+    @staticmethod
+    def _build_internal_checklist(state: DevGraphState) -> None:
+        handoff = state.get("handoff") or {}
+        restored = handoff.get("internal_checklist")
+        restored_by_id: Dict[str, Dict[str, Any]] = {}
+        if isinstance(restored, list) and restored:
+            for item in restored:
+                if not isinstance(item, dict):
+                    continue
+                item_id = str(item.get("id", "")).strip()
+                if not item_id:
+                    continue
+                restored_by_id[item_id] = item
+
+        checklist: List[Dict[str, Any]] = []
+        for task in state.get("bootstrap_tasks", []):
+            item_id = f"todo_{task.id}"
+            default_item = asdict(
+                DevChecklistItem(
+                    id=item_id,
+                    kind="bootstrap",
+                    description=task.description,
+                    task_ref=task.id,
+                    success_criteria=["command exits with code 0"],
+                )
+            )
+            checklist.append(restored_by_id.get(item_id, default_item))
+        for idx, target in enumerate(state.get("implementation_targets", []), start=1):
+            file_name = str(target.get("file_name", "")).strip() or f"target_{idx}"
+            item_id = f"todo_impl_{idx}"
+            default_item = asdict(
+                DevChecklistItem(
+                    id=item_id,
+                    kind="implementation",
+                    description=f"implement {file_name}",
+                    target_ref=str(target.get("expected_path_hint", file_name)),
+                    success_criteria=["target file mutated with evidence"],
+                )
+            )
+            checklist.append(restored_by_id.get(item_id, default_item))
+        for task in state.get("validation_tasks", []):
+            item_id = f"todo_{task.id}"
+            default_item = asdict(
+                DevChecklistItem(
+                    id=item_id,
+                    kind="validation",
+                    description=task.description,
+                    task_ref=task.id,
+                    success_criteria=["validation task completed"],
+                    mandatory=False,
+                )
+            )
+            checklist.append(restored_by_id.get(item_id, default_item))
+        for task in state.get("final_compile_tasks", []):
+            deps = [str(item.get("id")) for item in checklist if isinstance(item, dict)]
+            item_id = f"todo_{task.id}"
+            default_item = asdict(
+                DevChecklistItem(
+                    id=item_id,
+                    kind="final_compile",
+                    description=task.description,
+                    task_ref=task.id,
+                    depends_on=deps,
+                    success_criteria=["compile/build gate command completed"],
+                )
+            )
+            checklist.append(restored_by_id.get(item_id, default_item))
+        state["internal_checklist"] = checklist
+        DevMasterGraph._reindex_checklist(state)
+        if restored_by_id:
+            DevMasterGraph._emit(
+                state,
+                f"[CHECKLIST] restored_and_reconciled items={len(checklist)} restored={len(restored_by_id)}",
+            )
+        else:
+            DevMasterGraph._emit(state, f"[CHECKLIST] initialized items={len(checklist)}")
+
+    @staticmethod
     def _ingest_pm_plan(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "ingest_pm_plan"
         DevMasterGraph._emit(state, "[PHASE_START] ingest_pm_plan")
         handoff = state.get("handoff") or {}
+        if isinstance(handoff.get("task_outcomes"), list):
+            state["task_outcomes"] = [x for x in handoff.get("task_outcomes", []) if isinstance(x, dict)]
+        if isinstance(handoff.get("checklist_cursor"), str):
+            state["checklist_cursor"] = str(handoff.get("checklist_cursor", ""))
         project_root = handoff.get("project_root")
         if isinstance(project_root, str) and "/" in project_root:
             normalized_root = project_root.replace("\\", "/").strip().lstrip("./")
@@ -297,6 +488,48 @@ class DevMasterGraph:
         return []
 
     @staticmethod
+    def _is_long_running_validation_command(command: str) -> bool:
+        low = f" {str(command or '').lower()} "
+        hints = [
+            " npm run dev ",
+            " npm start ",
+            " pnpm dev ",
+            " yarn dev ",
+            " vite ",
+            " next dev ",
+            " flask run ",
+            " uvicorn ",
+            " rails server ",
+            " dotnet watch ",
+        ]
+        return any(token in low for token in hints)
+
+    @staticmethod
+    def _infer_final_compile_commands(
+        *,
+        project_dir: str,
+        stacks: List[str],
+        validation_commands: List[str],
+    ) -> List[str]:
+        compile_candidates: List[str] = []
+        for command in validation_commands:
+            if not DevMasterGraph._is_long_running_validation_command(command):
+                compile_candidates.append(command)
+        if compile_candidates:
+            return compile_candidates
+
+        default_candidates = DevMasterGraph._default_validation_commands(stacks)
+        for command in default_candidates:
+            if not DevMasterGraph._is_long_running_validation_command(command):
+                compile_candidates.append(command)
+
+        package_json = os.path.join(project_dir, "package.json")
+        if not compile_candidates and os.path.exists(package_json):
+            compile_candidates.append("npm run build")
+
+        return compile_candidates
+
+    @staticmethod
     def _extract_validation_command(raw: str) -> str:
         val = (raw or "").strip()
         if not val:
@@ -320,6 +553,24 @@ class DevMasterGraph:
         project_dir = os.path.join(state["scope_root"], rel)
         os.makedirs(project_dir, exist_ok=True)
         detected = DevMasterGraph._detect_stacks_for_root(project_dir)
+        if detected == ["generic"]:
+            stack_text_tokens: List[str] = []
+            for task in state.get("bootstrap_tasks", []):
+                if isinstance(task, DevTask):
+                    stack_text_tokens.append(str(task.command or ""))
+            plan_stack = state.get("plan", {}).get("stack", {})
+            if isinstance(plan_stack, dict):
+                stack_text_tokens.append(str(plan_stack.get("frontend", "")))
+                stack_text_tokens.append(str(plan_stack.get("backend", "")))
+            stack_text = " ".join(stack_text_tokens).lower()
+            if any(tok in stack_text for tok in ["npm", "pnpm", "yarn", "vite", "react", "next"]):
+                detected = ["node"]
+            elif any(tok in stack_text for tok in ["dotnet", "c#", "asp.net"]):
+                detected = ["dotnet"]
+            elif any(tok in stack_text for tok in ["python", "pip", "pytest", "django", "flask", "fastapi"]):
+                detected = ["python"]
+            elif any(tok in stack_text for tok in ["ruby", "rails", "bundler", "rake"]):
+                detected = ["ruby"]
         state["detected_stacks"] = detected
         state["active_project_root"] = project_dir
 
@@ -339,12 +590,18 @@ class DevMasterGraph:
 
         if not validation_commands and not raw_validation_requirements:
             validation_commands = DevMasterGraph._default_validation_commands(detected)
+        final_compile_commands = DevMasterGraph._infer_final_compile_commands(
+            project_dir=project_dir,
+            stacks=detected,
+            validation_commands=validation_commands,
+        )
 
         state["dev_preflight_plan"] = {
             "os": platform.system(),
             "active_project_root": project_dir,
             "detected_stacks": detected,
             "validation_commands": validation_commands,
+            "final_compile_commands": final_compile_commands,
             "raw_validation_requirements": raw_validation_requirements,
             "unresolved_validation_requirements": unresolved_validation_requirements,
         }
@@ -358,6 +615,17 @@ class DevMasterGraph:
             )
             for idx, cmd in enumerate(validation_commands)
         ]
+        state["final_compile_tasks"] = [
+            DevTask(
+                id=f"final_compile_{idx+1}",
+                description=f"run final compile gate: {cmd}",
+                command=cmd,
+                cwd=project_root,
+                kind="validation",
+            )
+            for idx, cmd in enumerate(final_compile_commands)
+        ]
+        DevMasterGraph._build_internal_checklist(state)
         DevMasterGraph._emit(
             state,
             f"[PREFLIGHT] os={state['dev_preflight_plan']['os']} stacks={detected} active_root={project_dir}",
@@ -371,6 +639,10 @@ class DevMasterGraph:
                 state,
                 f"[PREFLIGHT] unresolved_validation_requirements={unresolved_validation_requirements}",
             )
+        if final_compile_commands:
+            DevMasterGraph._emit(state, f"[PREFLIGHT] final_compile_commands={final_compile_commands}")
+        else:
+            DevMasterGraph._emit(state, "[PREFLIGHT] no terminating compile commands inferred")
         state["phase_status"]["dev_preflight_planning"] = "completed"
         return state
 
@@ -638,17 +910,48 @@ class DevMasterGraph:
         }
 
     @staticmethod
+    def _file_sha1(path: str) -> str:
+        if not os.path.exists(path) or not os.path.isfile(path):
+            return ""
+        with open(path, "rb") as fh:
+            return hashlib.sha1(fh.read()).hexdigest()
+
+    @staticmethod
     def _execute_bootstrap_phase(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "execute_bootstrap_phase"
         DevMasterGraph._emit(state, "[PHASE_START] execute_bootstrap_phase")
         DevMasterGraph._emit(state, "[PHASE] bootstrap")
+        next_item = DevMasterGraph._next_actionable_checklist_item(state)
+        if next_item:
+            DevMasterGraph._emit(
+                state,
+                f"[CHECKLIST] next_actionable={next_item.get('id')} kind={next_item.get('kind')}",
+            )
         plan_constraints = [
             str(x).strip()
             for x in state.get("plan", {}).get("constraints", [])
             if isinstance(x, str) and str(x).strip()
         ]
-        logs, touched_paths, errors, attempt_history, pending_llm_task = execute_dev_tasks(
-            state.get("bootstrap_tasks", []),
+        bootstrap_tasks = []
+        for task in state.get("bootstrap_tasks", []):
+            item = DevMasterGraph._find_checklist_item(state, f"todo_{task.id}")
+            if item and str(item.get("status", "")) == "completed":
+                continue
+            bootstrap_tasks.append(task)
+            DevMasterGraph._set_checklist_status(
+                state,
+                f"todo_{task.id}",
+                "in_progress",
+                evidence={"phase": "bootstrap", "task_id": task.id},
+            )
+        if not bootstrap_tasks:
+            state["bootstrap_status"] = "completed"
+            state["phase_status"]["execute_bootstrap_phase"] = "completed"
+            DevMasterGraph._emit(state, "[BOOTSTRAP] no pending bootstrap checklist items")
+            return state
+
+        logs, touched_paths, errors, attempt_history, pending_llm_task, outcomes = execute_dev_tasks(
+            bootstrap_tasks,
             scope_root=state["scope_root"],
             max_retries=int(state.get("max_retries", 5)),
             reserve_last_for_llm=True,
@@ -658,11 +961,17 @@ class DevMasterGraph:
             stack_hint=(state.get("detected_stacks") or ["generic"])[0],
             interactive_prompt_timeout_seconds=60.0,
             constraints=plan_constraints,
+            command_run_mode="terminating",
         )
         state["logs"].extend(logs)
         state["touched_paths"].extend(touched_paths)
         state["attempt_history"].extend(attempt_history)
+        state["task_outcomes"].extend(outcomes)
         state["retry_count"] = len(state.get("attempt_history", []))
+        for outcome in outcomes:
+            checklist_id = f"todo_{outcome.get('task_id', '')}"
+            status = "completed" if outcome.get("status") == "completed" else "blocked"
+            DevMasterGraph._set_checklist_status(state, checklist_id, status, evidence=outcome)
         if errors:
             state["errors"].extend(errors)
             state["status"] = "bootstrap_failed"
@@ -802,12 +1111,24 @@ class DevMasterGraph:
         state["attempt_history"].append(recover_attempt)
         state["retry_count"] = len(state.get("attempt_history", []))
         if recover_error:
+            DevMasterGraph._set_checklist_status(
+                state,
+                f"todo_{pending_llm_task['task_id']}",
+                "failed",
+                evidence={"phase": "bootstrap", "error": recover_error},
+            )
             state["errors"].append(recover_error)
             state["status"] = "bootstrap_failed"
             state["bootstrap_status"] = "failed"
             state["last_error"] = recover_error
             state["phase_status"]["execute_bootstrap_phase"] = "failed"
             return state
+        DevMasterGraph._set_checklist_status(
+            state,
+            f"todo_{pending_llm_task['task_id']}",
+            "completed",
+            evidence=recover_attempt,
+        )
         state["bootstrap_status"] = "completed"
         root_evidence = DevMasterGraph._resolve_active_project_root_after_bootstrap(
             state=state,
@@ -978,20 +1299,33 @@ class DevMasterGraph:
                 safe_target = discovered
             else:
                 return "missing_expected_file", "requires_discovery_or_clarification", safe_target
-        if pass_index == 1:
-            if not os.path.exists(safe_target):
-                if update_like:
-                    return "missing_expected_file", "not_created_due_to_update_policy", safe_target
-                with open(safe_target, "w", encoding="utf-8") as fh:
-                    fh.write(DevMasterGraph._comment_for_path(safe_target, f"IMPLEMENT: {details or 'initial implementation'}"))
-                return "created_file", "initial_implementation", safe_target
-            return "observed_file", "existing_file_preserved", safe_target
-
-        if os.path.exists(safe_target) and os.path.getsize(safe_target) == 0:
+        if not os.path.exists(safe_target):
+            if update_like:
+                return "missing_expected_file", "not_created_due_to_update_policy", safe_target
             with open(safe_target, "w", encoding="utf-8") as fh:
-                fh.write(DevMasterGraph._comment_for_path(safe_target, f"IMPLEMENT: {details or 'refinement implementation'}"))
+                fh.write(DevMasterGraph._comment_for_path(safe_target, f"IMPLEMENT: {details or 'initial implementation'}"))
+            return "created_file", "initial_implementation", safe_target
+
+        with open(safe_target, "r", encoding="utf-8", errors="ignore") as fh:
+            original = fh.read()
+        marker = DevMasterGraph._comment_for_path(
+            safe_target,
+            f"IMPLEMENT PASS {pass_index}: {details or 'target mutation'}",
+        )
+        if marker not in original:
+            if pass_index == 1 and update_like:
+                new_content = marker + original
+            else:
+                new_content = original + ("" if original.endswith("\n") else "\n") + marker
+            with open(safe_target, "w", encoding="utf-8") as fh:
+                fh.write(new_content)
+            return "updated_file", "mutated_with_marker", safe_target
+
+        if os.path.getsize(safe_target) == 0:
+            with open(safe_target, "w", encoding="utf-8") as fh:
+                fh.write(marker)
             return "updated_file", "filled_empty_file", safe_target
-        return "observed_file", "no_unnecessary_mutation", safe_target
+        return "observed_file", "marker_already_present", safe_target
 
     @staticmethod
     def _execute_implementation_phase(state: DevGraphState) -> DevGraphState:
@@ -1014,6 +1348,25 @@ class DevMasterGraph:
         state["llm_context_contract"] = DevMasterGraph._build_llm_context_contract(state)
         DevMasterGraph._emit(state, f"[CONTEXT] active_root={active_root}")
         targets = state.get("implementation_targets", [])
+        pending_targets: List[Tuple[int, Dict[str, str]]] = []
+        target_proofs: Dict[str, Dict[str, Any]] = {}
+        for idx, target in enumerate(targets, start=1):
+            item = DevMasterGraph._find_checklist_item(state, f"todo_impl_{idx}")
+            if item and str(item.get("status", "")) == "completed":
+                continue
+            pending_targets.append((idx, target))
+            checklist_id = f"todo_impl_{idx}"
+            DevMasterGraph._set_checklist_status(
+                state,
+                checklist_id,
+                "in_progress",
+                evidence={"phase": "implementation", "pass": 0},
+            )
+        if not pending_targets:
+            state["implementation_status"] = "completed"
+            state["phase_status"]["execute_implementation_phase"] = "completed"
+            DevMasterGraph._emit(state, "[IMPLEMENTATION] no pending implementation checklist items")
+            return state
         total_actions = 0
         try:
             for pass_index in (1, 2):
@@ -1024,7 +1377,7 @@ class DevMasterGraph:
                     f"[WHY_THIS_STEP] pass={pass_index} iterative target execution with context-aware mutation policy"
                 )
                 pass_actions = 0
-                for target in targets:
+                for idx, target in pending_targets:
                     expected = str(target.get("expected_path_hint", ""))
                     modification_type = str(target.get("modification_type", "")).lower()
                     details = str(target.get("details", "")).strip()
@@ -1036,6 +1389,9 @@ class DevMasterGraph:
                         expected_path_hint=expected,
                         file_name=file_name,
                     )
+                    key = str(expected or file_name or safe_target)
+                    if key not in target_proofs:
+                        target_proofs[key] = {"before_hash": DevMasterGraph._file_sha1(safe_target), "after_hash": ""}
                     action, action_note, resolved_target = DevMasterGraph._apply_target_in_pass(
                         safe_target=safe_target,
                         file_name=file_name,
@@ -1047,6 +1403,7 @@ class DevMasterGraph:
                     )
                     if action == "missing_expected_file":
                         raise RuntimeError(f"Expected target missing and discovery failed: {expected}")
+                    target_proofs[key]["after_hash"] = DevMasterGraph._file_sha1(resolved_target)
                     state["touched_paths"].append(resolved_target)
                     DevMasterGraph._emit(
                         state,
@@ -1059,8 +1416,34 @@ class DevMasterGraph:
                     state,
                     f"[PASS_SUMMARY] {pass_label} actions={pass_actions} touched_total={len(state.get('touched_paths', []))}"
                 )
+            for idx, target in pending_targets:
+                key = str(target.get("expected_path_hint", "") or target.get("file_name", ""))
+                proof = target_proofs.get(key, {})
+                before_hash = str(proof.get("before_hash", ""))
+                after_hash = str(proof.get("after_hash", ""))
+                if before_hash == after_hash:
+                    raise RuntimeError(
+                        f"Target mutation proof missing for {key or f'implementation_target_{idx}'}: no content delta detected."
+                    )
+                DevMasterGraph._set_checklist_status(
+                    state,
+                    f"todo_impl_{idx}",
+                    "completed",
+                    evidence={
+                        "phase": "implementation",
+                        "before_hash": before_hash,
+                        "after_hash": after_hash,
+                    },
+                )
         except Exception as e:
             state["errors"].append(f"[IMPLEMENTATION_ERROR] {e}")
+            for idx, _target in pending_targets:
+                DevMasterGraph._set_checklist_status(
+                    state,
+                    f"todo_impl_{idx}",
+                    "failed",
+                    evidence={"phase": "implementation", "error": str(e)},
+                )
             state["implementation_status"] = "failed"
             state["status"] = "implementation_failed"
             state["phase_status"]["execute_implementation_phase"] = "failed"
@@ -1091,6 +1474,10 @@ class DevMasterGraph:
                 "[VALIDATION] required validations were provided by PM but none were executable: "
                 f"{unresolved_requirements}"
             )
+            for item in state.get("internal_checklist", []):
+                if isinstance(item, dict) and str(item.get("kind")) == "validation":
+                    item["status"] = "failed"
+                    DevMasterGraph._append_item_evidence(item, {"phase": "validation", "error": msg})
             state["errors"].append(msg)
             state["validation_status"] = "failed"
             state["status"] = "implementation_failed"
@@ -1098,15 +1485,22 @@ class DevMasterGraph:
             DevMasterGraph._emit(state, msg)
             return state
 
-        if not validation_tasks:
+        filtered_validation_tasks: List[DevTask] = []
+        for task in validation_tasks:
+            item = DevMasterGraph._find_checklist_item(state, f"todo_{task.id}")
+            if item and str(item.get("status", "")) == "completed":
+                continue
+            filtered_validation_tasks.append(task)
+
+        if not filtered_validation_tasks:
             state["validation_status"] = "completed"
             state["phase_status"]["execute_validation_phase"] = "completed"
-            DevMasterGraph._emit(state, "[VALIDATION] no executable validations; marked completed")
+            DevMasterGraph._emit(state, "[VALIDATION] no pending executable validations; marked completed")
             return state
 
         active_root = str(state.get("active_project_root", "")).strip()
         if active_root:
-            validation_tasks = [
+            filtered_validation_tasks = [
                 DevTask(
                     id=task.id,
                     description=task.description,
@@ -1114,13 +1508,20 @@ class DevMasterGraph:
                     cwd=active_root,
                     kind=task.kind,
                 )
-                for task in validation_tasks
+                for task in filtered_validation_tasks
             ]
             DevMasterGraph._emit(state, f"[VALIDATION] reconciled task cwd to active root {active_root}")
         state["llm_context_contract"] = DevMasterGraph._build_llm_context_contract(state)
+        for task in filtered_validation_tasks:
+            DevMasterGraph._set_checklist_status(
+                state,
+                f"todo_{task.id}",
+                "in_progress",
+                evidence={"phase": "validation", "task_id": task.id},
+            )
 
-        logs, touched_paths, errors, attempt_history, pending = execute_dev_tasks(
-            validation_tasks,
+        logs, touched_paths, errors, attempt_history, pending, outcomes = execute_dev_tasks(
+            filtered_validation_tasks,
             scope_root=state["scope_root"],
             max_retries=int(state.get("max_retries", 5)),
             reserve_last_for_llm=False,
@@ -1133,10 +1534,16 @@ class DevMasterGraph:
                 for x in state.get("plan", {}).get("constraints", [])
                 if isinstance(x, str) and str(x).strip()
             ],
+            command_run_mode="auto",
         )
         state["logs"].extend(logs)
         state["touched_paths"].extend(touched_paths)
         state["attempt_history"].extend(attempt_history)
+        state["task_outcomes"].extend(outcomes)
+        for outcome in outcomes:
+            checklist_id = f"todo_{outcome.get('task_id', '')}"
+            status = "completed" if outcome.get("status") == "completed" else "failed"
+            DevMasterGraph._set_checklist_status(state, checklist_id, status, evidence=outcome)
         if pending:
             state["errors"].append(f"[VALIDATION] pending llm recovery unsupported for validation: {pending.get('task_id')}")
         if errors or pending:
@@ -1152,6 +1559,101 @@ class DevMasterGraph:
         return state
 
     @staticmethod
+    def _execute_final_compile_gate(state: DevGraphState) -> DevGraphState:
+        state["current_step"] = "execute_final_compile_gate"
+        DevMasterGraph._emit(state, "[PHASE_START] execute_final_compile_gate")
+        if (
+            state.get("bootstrap_status") == "failed"
+            or state.get("implementation_status") == "failed"
+            or state.get("validation_status") == "failed"
+        ):
+            state["final_compile_status"] = "skipped"
+            state["phase_status"]["execute_final_compile_gate"] = "skipped"
+            DevMasterGraph._emit(state, "[FINAL_COMPILE] skipped due to previous failure")
+            return state
+
+        compile_tasks = state.get("final_compile_tasks", [])
+        had_compile_tasks = bool(compile_tasks)
+        filtered_compile_tasks: List[DevTask] = []
+        for task in compile_tasks:
+            item = DevMasterGraph._find_checklist_item(state, f"todo_{task.id}")
+            if item and str(item.get("status", "")) == "completed":
+                continue
+            filtered_compile_tasks.append(task)
+        compile_tasks = filtered_compile_tasks
+        if had_compile_tasks and not compile_tasks:
+            state["final_compile_status"] = "completed"
+            state["phase_status"]["execute_final_compile_gate"] = "completed"
+            DevMasterGraph._emit(state, "[FINAL_COMPILE] all compile checklist items already completed")
+            return state
+        if not compile_tasks:
+            state["errors"].append("[FINAL_COMPILE] no terminating compile/build command inferred.")
+            state["final_compile_status"] = "failed"
+            state["status"] = "implementation_failed"
+            state["phase_status"]["execute_final_compile_gate"] = "failed"
+            return state
+
+        active_root = str(state.get("active_project_root", "")).strip()
+        if active_root:
+            compile_tasks = [
+                DevTask(
+                    id=task.id,
+                    description=task.description,
+                    command=task.command,
+                    cwd=active_root,
+                    kind=task.kind,
+                )
+                for task in compile_tasks
+            ]
+
+        for task in compile_tasks:
+            DevMasterGraph._set_checklist_status(
+                state,
+                f"todo_{task.id}",
+                "in_progress",
+                evidence={"phase": "final_compile", "task_id": task.id},
+            )
+
+        logs, touched_paths, errors, attempt_history, pending, outcomes = execute_dev_tasks(
+            compile_tasks,
+            scope_root=state["scope_root"],
+            max_retries=int(state.get("max_retries", 5)),
+            reserve_last_for_llm=False,
+            log_sink=state.get("log_sink"),
+            stack_hint=(state.get("detected_stacks") or ["generic"])[0],
+            ask_runtime_prompt=(lambda q: state.get("ask_user")(f"[DEV RUNTIME PROMPT] {q} (y/N)")) if callable(state.get("ask_user")) else None,
+            interactive_prompt_timeout_seconds=60.0,
+            constraints=[
+                str(x).strip()
+                for x in state.get("plan", {}).get("constraints", [])
+                if isinstance(x, str) and str(x).strip()
+            ],
+            command_run_mode="terminating",
+        )
+        state["logs"].extend(logs)
+        state["touched_paths"].extend(touched_paths)
+        state["attempt_history"].extend(attempt_history)
+        state["task_outcomes"].extend(outcomes)
+        for outcome in outcomes:
+            checklist_id = f"todo_{outcome.get('task_id', '')}"
+            status = "completed" if outcome.get("status") == "completed" else "failed"
+            DevMasterGraph._set_checklist_status(state, checklist_id, status, evidence=outcome)
+        if pending:
+            errors.append(f"[FINAL_COMPILE] pending llm recovery unsupported for final compile: {pending.get('task_id')}")
+        if errors:
+            state["errors"].extend(errors)
+            state["final_compile_status"] = "failed"
+            state["status"] = "implementation_failed"
+            state["phase_status"]["execute_final_compile_gate"] = "failed"
+            DevMasterGraph._emit(state, "[FINAL_COMPILE] failed")
+            return state
+
+        state["final_compile_status"] = "completed"
+        state["phase_status"]["execute_final_compile_gate"] = "completed"
+        DevMasterGraph._emit(state, "[FINAL_COMPILE] completed")
+        return state
+
+    @staticmethod
     def _finalize_result(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "finalize_result"
         DevMasterGraph._emit(state, "[PHASE_START] finalize_result")
@@ -1161,13 +1663,27 @@ class DevMasterGraph:
             state["status"] = "bootstrap_failed"
         elif state.get("validation_status") not in {"completed", "skipped"}:
             state["status"] = "implementation_failed"
+        elif state.get("final_compile_status") != "completed":
+            state["status"] = "implementation_failed"
+        elif not DevMasterGraph._all_mandatory_checklist_items_completed(state):
+            state["status"] = "implementation_failed"
+            state["errors"].append("[CHECKLIST] mandatory items remain incomplete.")
         else:
             state["status"] = "completed"
         err_count = len(state.get("errors", []))
+        checklist_total = len(state.get("internal_checklist", []))
+        checklist_completed = len(
+            [
+                item
+                for item in state.get("internal_checklist", [])
+                if isinstance(item, dict) and str(item.get("status", "")) == "completed"
+            ]
+        )
         state["final_summary"] = (
             f"Developer master finished with status={state['status']} and errors={err_count}. "
             f"phase_status={state.get('phase_status', {})} "
-            f"pass_status={state.get('implementation_pass_statuses', [])}"
+            f"pass_status={state.get('implementation_pass_statuses', [])} "
+            f"checklist={checklist_completed}/{checklist_total}"
         )
         DevMasterGraph._emit(state, f"[FINAL] {state['final_summary']}")
         state["phase_status"]["finalize_result"] = "completed"

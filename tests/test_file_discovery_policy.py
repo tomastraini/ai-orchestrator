@@ -31,7 +31,7 @@ class FileDiscoveryPolicyTests(unittest.TestCase):
                 }
             ],
             "constraints": ["none"],
-            "validation": [],
+            "validation": ["python -c \"print('ok')\""],
             "clarification_summary": [],
         }
         handoff = {"project_root": "projects/calc"}

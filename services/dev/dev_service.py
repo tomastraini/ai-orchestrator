@@ -5,6 +5,7 @@ import uuid
 from typing import Any, Callable, Dict, Optional
 
 from services.dev.dev_master_graph import DevMasterGraph
+from services.pm.dev_handoff_store import DevHandoffStore
 
 
 DevAskFn = Callable[[str], str]
@@ -55,6 +56,24 @@ class DevService:
         logs = final_state.get("logs", [])
         errors = final_state.get("errors", [])
         build_logs = "\n".join(str(x) for x in logs + errors).strip() or None
+        if isinstance(handoff, dict):
+            updated_handoff = dict(handoff)
+            internal_checklist = final_state.get("internal_checklist", [])
+            updated_handoff["internal_checklist"] = internal_checklist if isinstance(internal_checklist, list) else []
+            updated_handoff["checklist_cursor"] = str(final_state.get("checklist_cursor", ""))
+            task_outcomes = final_state.get("task_outcomes", [])
+            updated_handoff["task_outcomes"] = task_outcomes if isinstance(task_outcomes, list) else []
+            updated_handoff["dev_preflight_plan"] = final_state.get("dev_preflight_plan", {})
+            pending_ids: list[str] = []
+            if isinstance(internal_checklist, list):
+                for item in internal_checklist:
+                    if not isinstance(item, dict):
+                        continue
+                    if str(item.get("status", "")) != "completed":
+                        pending_ids.append(str(item.get("id", "")))
+            updated_handoff["pending_tasks"] = [x for x in pending_ids if x]
+            repo_root = os.path.dirname(self.scope_root.rstrip(os.sep))
+            DevHandoffStore(repo_root=repo_root).write_latest(updated_handoff)
 
         return {
             "branch_name": None,

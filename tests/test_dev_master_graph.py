@@ -57,9 +57,16 @@ class DevMasterGraphTests(unittest.TestCase):
         self.assertIn("[PHASE] implementation", logs_blob)
         self.assertIn("[PHASE] implementation_pass_1", logs_blob)
         self.assertIn("[PHASE] implementation_pass_2", logs_blob)
+        self.assertIn("[PHASE_START] execute_final_compile_gate", logs_blob)
         self.assertIn("[PASS_SUMMARY]", logs_blob)
         self.assertIn("[IMPLEMENTATION]", logs_blob)
+        self.assertIn("[CHECKLIST]", logs_blob)
         self.assertIn("[FINAL]", logs_blob)
+        self.assertEqual(state.get("final_compile_status"), "completed")
+        self.assertTrue(
+            all(str(item.get("status", "")) == "completed" for item in state.get("internal_checklist", [])),
+            msg=str(state.get("internal_checklist", [])),
+        )
 
     def test_existing_project_without_path_prompts_clarification(self) -> None:
         plan = self._sample_plan()
@@ -189,6 +196,26 @@ class DevMasterGraphTests(unittest.TestCase):
         self.assertEqual(state.get("status"), "implementation_failed")
         self.assertTrue(
             any("none were executable" in err.lower() for err in state.get("errors", [])),
+            msg=str(state.get("errors", [])),
+        )
+
+    def test_final_compile_gate_blocks_completion_when_missing(self) -> None:
+        plan = self._sample_plan()
+        plan["bootstrap_commands"] = []
+        plan["validation"] = []
+        plan["stack"] = {"frontend": "Generic", "backend": None, "language_preferences": ["TypeScript"]}
+        graph = DevMasterGraph()
+        with tempfile.TemporaryDirectory() as tmp:
+            state = graph.run(
+                request_id="req-final-compile-missing-1",
+                plan=plan,
+                scope_root=tmp,
+                ask_user=lambda _: "n/a",
+            )
+        self.assertEqual(state.get("final_compile_status"), "failed")
+        self.assertEqual(state.get("status"), "implementation_failed")
+        self.assertTrue(
+            any("no terminating compile/build command inferred" in err.lower() for err in state.get("errors", [])),
             msg=str(state.get("errors", [])),
         )
 

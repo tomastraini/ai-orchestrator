@@ -6,7 +6,7 @@ import subprocess
 import threading
 import time
 from queue import Empty, Queue
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 from services.dev.command_policy import (
     assess_risk,
@@ -24,6 +24,10 @@ class DevExecutorError(RuntimeError):
 
 PROMPT_REGEX = re.compile(
     r"(ok to proceed\??|proceed\??|\[y/n\]|\(y/n\)|\(y/N\)|\(Y/n\)|confirm\??)",
+    re.IGNORECASE,
+)
+SERVICE_READY_REGEX = re.compile(
+    r"(ready in|localhost:|listening on|started|running at|vite v\d)",
     re.IGNORECASE,
 )
 
@@ -96,6 +100,23 @@ def _emit(logs: List[str], message: str, log_sink: Optional[Callable[[str], None
         except Exception:
             # Log streaming should never break execution.
             pass
+
+
+def _is_likely_long_running_command(command: str) -> bool:
+    low = f" {str(command or '').lower()} "
+    tokens = [
+        " npm run dev ",
+        " npm start ",
+        " pnpm dev ",
+        " yarn dev ",
+        " vite ",
+        " next dev ",
+        " flask run ",
+        " uvicorn ",
+        " rails server ",
+        " dotnet watch ",
+    ]
+    return any(token in low for token in tokens)
 
 
 def classify_failure(stdout: str, stderr: str, exit_code: int) -> str:
@@ -217,6 +238,7 @@ def _run_once(
     heartbeat_seconds: float = 15.0,
     ask_runtime_prompt: Optional[Callable[[str], str]] = None,
     interactive_prompt_timeout_seconds: float = 60.0,
+    run_mode: Literal["terminating", "service_smoke"] = "terminating",
 ) -> Tuple[List[str], Optional[str], Dict[str, Any]]:
     logs: List[str] = []
     started = time.time()
@@ -256,6 +278,7 @@ def _run_once(
         last_activity = time.time()
         pending_prompt_started_at: Optional[float] = None
         timeout_at = started + float(timeout_seconds)
+        smoke_ready = False
         while True:
             now = time.time()
             if now >= timeout_at:
@@ -298,6 +321,13 @@ def _run_once(
                     except Exception as e:
                         _emit(logs, f"[INTERACTIVE_PROMPT_ERROR] {task_id} failed to send response: {e}", log_sink)
                     pending_prompt_started_at = now
+                if run_mode == "service_smoke" and SERVICE_READY_REGEX.search(line):
+                    smoke_ready = True
+                    _emit(logs, f"[SERVICE_SMOKE_READY] {task_id} readiness signal detected", log_sink)
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
                 last_activity = now
             except Empty:
                 pass
@@ -339,6 +369,9 @@ def _run_once(
         if stderr:
             _emit(logs, f"[STDERR] {task_id}\n{stderr}", log_sink)
         exit_code = int(proc.returncode if proc.returncode is not None else 1)
+        if run_mode == "service_smoke" and smoke_ready:
+            # A smoke run is successful once readiness is observed.
+            exit_code = 0
         category = classify_failure(stdout, stderr, exit_code)
         attempt = {
             "task_id": task_id,
@@ -349,6 +382,8 @@ def _run_once(
             "elapsed_ms": elapsed_ms,
             "stdout": stdout,
             "stderr": stderr,
+            "run_mode": run_mode,
+            "smoke_ready": smoke_ready,
         }
         if exit_code == 0:
             _emit(logs, f"[DONE] {task_id} in {elapsed_ms}ms", log_sink)
@@ -398,12 +433,14 @@ def execute_dev_tasks(
     stack_hint: str = "generic",
     interactive_prompt_timeout_seconds: float = 60.0,
     constraints: Optional[List[str]] = None,
-) -> Tuple[List[str], List[str], List[str], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    command_run_mode: Literal["terminating", "service_smoke", "auto"] = "terminating",
+) -> Tuple[List[str], List[str], List[str], List[Dict[str, Any]], Optional[Dict[str, Any]], List[Dict[str, Any]]]:
     logs: List[str] = []
     touched_paths: List[str] = []
     errors: List[str] = []
     attempt_history: List[Dict[str, Any]] = []
     pending_llm_task: Optional[Dict[str, Any]] = None
+    task_outcomes: List[Dict[str, Any]] = []
     active_constraints = constraints or []
 
     scope_abs = _normalize_scope_path(scope_root)
@@ -453,6 +490,11 @@ def execute_dev_tasks(
         for attempt_idx in range(1, deterministic_budget + 1):
             strategy = "original" if attempt_idx == 1 else "deterministic_rewrite"
             attempted_commands.append(current_command)
+            effective_run_mode: Literal["terminating", "service_smoke"]
+            if command_run_mode == "auto":
+                effective_run_mode = "service_smoke" if _is_likely_long_running_command(current_command) else "terminating"
+            else:
+                effective_run_mode = command_run_mode
             attempt_logs, run_error, attempt = _run_once(
                 task_id=task.id,
                 task_kind=task.kind,
@@ -463,6 +505,7 @@ def execute_dev_tasks(
                 heartbeat_seconds=heartbeat_seconds,
                 ask_runtime_prompt=ask_runtime_prompt,
                 interactive_prompt_timeout_seconds=interactive_prompt_timeout_seconds,
+                run_mode=effective_run_mode,
             )
             attempt["attempt"] = attempt_idx
             attempt["strategy"] = strategy
@@ -524,11 +567,53 @@ def execute_dev_tasks(
                     f"elapsed_ms={last_attempt.get('elapsed_ms')}",
                     log_sink,
                 )
+                task_outcomes.append(
+                    {
+                        "task_id": task.id,
+                        "status": "pending_llm",
+                        "command": current_command,
+                        "cwd": cwd,
+                        "category": last_attempt.get("category", "unknown"),
+                        "exit_code": last_attempt.get("exit_code"),
+                        "elapsed_ms": last_attempt.get("elapsed_ms", 0),
+                        "run_mode": last_attempt.get("run_mode", "terminating"),
+                        "evidence": {"attempted_commands": attempted_commands},
+                    }
+                )
             else:
                 errors.append(last_error)
+                task_outcomes.append(
+                    {
+                        "task_id": task.id,
+                        "status": "failed",
+                        "command": current_command,
+                        "cwd": cwd,
+                        "category": (last_attempt or {}).get("category", "unknown"),
+                        "exit_code": (last_attempt or {}).get("exit_code"),
+                        "elapsed_ms": (last_attempt or {}).get("elapsed_ms", 0),
+                        "run_mode": (last_attempt or {}).get("run_mode", "terminating"),
+                        "evidence": {"attempted_commands": attempted_commands},
+                    }
+                )
             break
+        task_outcomes.append(
+            {
+                "task_id": task.id,
+                "status": "completed",
+                "command": current_command,
+                "cwd": cwd,
+                "category": (last_attempt or {}).get("category", "none"),
+                "exit_code": (last_attempt or {}).get("exit_code", 0),
+                "elapsed_ms": (last_attempt or {}).get("elapsed_ms", 0),
+                "run_mode": (last_attempt or {}).get("run_mode", "terminating"),
+                "evidence": {
+                    "attempts": len(attempted_commands),
+                    "smoke_ready": bool((last_attempt or {}).get("smoke_ready", False)),
+                },
+            }
+        )
 
-    return logs, touched_paths, errors, attempt_history, pending_llm_task
+    return logs, touched_paths, errors, attempt_history, pending_llm_task, task_outcomes
 
 
 def execute_single_recovery_command(
@@ -543,6 +628,7 @@ def execute_single_recovery_command(
     heartbeat_seconds: float = 15.0,
     ask_runtime_prompt: Optional[Callable[[str], str]] = None,
     interactive_prompt_timeout_seconds: float = 60.0,
+    command_run_mode: Literal["terminating", "service_smoke"] = "terminating",
 ) -> Tuple[List[str], Optional[str], Dict[str, Any]]:
     scope_abs = _normalize_scope_path(scope_root)
     if _is_blocked_command(command):
@@ -571,4 +657,5 @@ def execute_single_recovery_command(
         heartbeat_seconds=heartbeat_seconds,
         ask_runtime_prompt=ask_runtime_prompt,
         interactive_prompt_timeout_seconds=interactive_prompt_timeout_seconds,
+        run_mode=command_run_mode,
     )

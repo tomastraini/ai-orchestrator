@@ -23,6 +23,23 @@ class DevTask:
     kind: Literal["bootstrap", "implementation", "validation"] = "implementation"
 
 
+ChecklistStatus = Literal["pending", "in_progress", "blocked", "completed", "failed"]
+
+
+@dataclass
+class DevChecklistItem:
+    id: str
+    kind: Literal["bootstrap", "implementation", "validation", "final_compile"]
+    status: ChecklistStatus = "pending"
+    description: str = ""
+    task_ref: Optional[str] = None
+    target_ref: Optional[str] = None
+    depends_on: List[str] = field(default_factory=list)
+    success_criteria: List[str] = field(default_factory=list)
+    mandatory: bool = True
+    evidence: List[Dict[str, Any]] = field(default_factory=list)
+
+
 @dataclass
 class DevClarificationQuestion:
     id: str

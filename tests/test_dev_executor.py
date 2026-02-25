@@ -22,7 +22,7 @@ class DevExecutorTests(unittest.TestCase):
                     cwd="../outside",
                 )
             ]
-            logs, touched, errors, _, _ = execute_dev_tasks(tasks, scope_root=tmp)
+            logs, touched, errors, _, _, _ = execute_dev_tasks(tasks, scope_root=tmp)
             self.assertEqual(logs, [])
             self.assertEqual(touched, [])
             self.assertTrue(any("[SCOPE]" in e for e in errors), msg=str(errors))
@@ -37,7 +37,7 @@ class DevExecutorTests(unittest.TestCase):
                     cwd=".",
                 )
             ]
-            _, _, errors, _, _ = execute_dev_tasks(tasks, scope_root=tmp)
+            _, _, errors, _, _, _ = execute_dev_tasks(tasks, scope_root=tmp)
             self.assertTrue(any("[BLOCKED]" in e for e in errors), msg=str(errors))
 
     def test_deterministic_rewrite_for_nest_and_cra(self) -> None:
@@ -76,7 +76,7 @@ class DevExecutorTests(unittest.TestCase):
                     cwd=".",
                 )
             ]
-            logs, _, errors, attempts, pending = execute_dev_tasks(
+            logs, _, errors, attempts, pending, outcomes = execute_dev_tasks(
                 tasks,
                 scope_root=tmp,
                 max_retries=3,
@@ -87,6 +87,7 @@ class DevExecutorTests(unittest.TestCase):
             self.assertTrue(any("[FAIL]" in e for e in errors), msg=str(errors))
             self.assertTrue(any("[RUN]" in x for x in logs), msg=str(logs))
             self.assertTrue(any("[WHY_THIS_STEP]" in x for x in logs), msg=str(logs))
+            self.assertTrue(any(str(x.get("status")) == "failed" for x in outcomes), msg=str(outcomes))
 
     def test_pending_llm_task_returned_after_deterministic_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -98,7 +99,7 @@ class DevExecutorTests(unittest.TestCase):
                     cwd=".",
                 )
             ]
-            logs, _, errors, attempts, pending = execute_dev_tasks(
+            logs, _, errors, attempts, pending, outcomes = execute_dev_tasks(
                 tasks,
                 scope_root=tmp,
                 max_retries=5,
@@ -115,6 +116,7 @@ class DevExecutorTests(unittest.TestCase):
                 any("[WHY_RETRY]" in x or "[WHY_RETRY_STOPPED]" in x for x in logs),
                 msg=str(logs),
             )
+            self.assertTrue(any(str(x.get("status")) == "pending_llm" for x in outcomes), msg=str(outcomes))
 
     def test_resolves_redundant_projects_prefix_in_cwd(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -126,7 +128,7 @@ class DevExecutorTests(unittest.TestCase):
                     cwd="projects/calculator/projects/calculator",
                 )
             ]
-            _, touched, errors, _, _ = execute_dev_tasks(tasks, scope_root=tmp)
+            _, touched, errors, _, _, _ = execute_dev_tasks(tasks, scope_root=tmp)
             self.assertEqual(errors, [], msg=str(errors))
             self.assertTrue(any("calculator" in path for path in touched), msg=str(touched))
             self.assertFalse(any("projects/calculator/projects/calculator" in p.replace("\\", "/") for p in touched))
@@ -141,7 +143,7 @@ class DevExecutorTests(unittest.TestCase):
                     cwd=".",
                 )
             ]
-            _, _, errors, _, _ = execute_dev_tasks(
+            _, _, errors, _, _, _ = execute_dev_tasks(
                 tasks,
                 scope_root=tmp,
                 constraints=["Do not run dev server in bootstrap"],
@@ -159,7 +161,7 @@ class DevExecutorTests(unittest.TestCase):
                     cwd=".",
                 )
             ]
-            logs, _, errors, _, _ = execute_dev_tasks(
+            logs, _, errors, _, _, _ = execute_dev_tasks(
                 tasks,
                 scope_root=tmp,
                 log_sink=captured.append,
@@ -180,7 +182,7 @@ class DevExecutorTests(unittest.TestCase):
                     cwd=".",
                 )
             ]
-            _, _, errors, _, _ = execute_dev_tasks(
+            _, _, errors, _, _, _ = execute_dev_tasks(
                 tasks,
                 scope_root=tmp,
                 log_sink=captured.append,
@@ -201,7 +203,7 @@ class DevExecutorTests(unittest.TestCase):
                     cwd=".",
                 )
             ]
-            logs, _, errors, _, _ = execute_dev_tasks(
+            logs, _, errors, _, _, outcomes = execute_dev_tasks(
                 tasks,
                 scope_root=tmp,
                 log_sink=captured.append,
@@ -212,6 +214,27 @@ class DevExecutorTests(unittest.TestCase):
             self.assertTrue(any("[INTERACTIVE_PROMPT]" in line for line in logs), msg=str(logs))
             self.assertTrue(any("forwarded response='y'" in line for line in logs), msg=str(logs))
             self.assertTrue(any("Ok to proceed?" in q for q in prompts), msg=str(prompts))
+            self.assertTrue(any(str(x.get("status")) == "completed" for x in outcomes), msg=str(outcomes))
+
+    def test_service_smoke_mode_terminates_after_readiness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tasks = [
+                DevTask(
+                    id="t9",
+                    description="long running simulated server",
+                    command="python -c \"import time; print('localhost:5173'); time.sleep(2)\"",
+                    cwd=".",
+                )
+            ]
+            _, _, errors, _, _, outcomes = execute_dev_tasks(
+                tasks,
+                scope_root=tmp,
+                command_run_mode="service_smoke",
+                timeout_seconds=5,
+                heartbeat_seconds=0.1,
+            )
+            self.assertEqual(errors, [], msg=str(errors))
+            self.assertTrue(any(bool(x.get("evidence", {}).get("smoke_ready")) for x in outcomes), msg=str(outcomes))
 
 
 if __name__ == "__main__":

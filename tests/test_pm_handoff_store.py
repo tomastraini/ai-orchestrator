@@ -71,6 +71,8 @@ class PMHandoffStoreTests(unittest.TestCase):
             with open(handoff_path, "r", encoding="utf-8") as fh:
                 payload = json.load(fh)
             self.assertEqual(payload["latest_handoff"]["request_id"], request_id)
+            self.assertIn("internal_checklist", payload["latest_handoff"])
+            self.assertIn("task_outcomes", payload["latest_handoff"])
 
     def test_handoff_normalizes_redundant_vite_target_path(self) -> None:
         plan = self._sample_plan()

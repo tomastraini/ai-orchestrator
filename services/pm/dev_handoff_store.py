@@ -256,14 +256,18 @@ def build_dev_handoff(
         "workspace_context": workspace_context,
         "workspace_snapshot_hash": workspace_snapshot_hash,
         "pending_tasks": [],
+        "internal_checklist": [],
+        "checklist_cursor": "",
         "memory": {"attempted_commands": [], "errors": []},
         "dev_preflight_plan": {
             "status": "pending",
             "detected_stacks": [],
             "validation_commands": [],
+            "final_compile_commands": [],
             "active_project_root": "",
         },
         "checkpoints": [],
+        "task_outcomes": [],
         "path_aliases": {
             "project_root": project_root,
             "project_name": normalize_rel_path(project_name),
