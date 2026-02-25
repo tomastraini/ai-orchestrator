@@ -18,8 +18,12 @@ ALLOWED_TOP_LEVEL_KEYS = {
     "constraints",
     "validation",
     "clarification_summary",
+    "product_contract",
+    "ambiguities",
 }
 REQUIRED_TOP_LEVEL_KEYS = set(ALLOWED_TOP_LEVEL_KEYS)
+REQUIRED_TOP_LEVEL_KEYS.remove("product_contract")
+REQUIRED_TOP_LEVEL_KEYS.remove("ambiguities")
 ALLOWED_TARGET_FILE_KEYS = {
     "file_name",
     "expected_path_hint",
@@ -73,31 +77,8 @@ def _require_list_of_non_empty_strings(
 def _require_typescript_preference(
     stack: Dict[str, Any], requirement: Optional[str]
 ) -> List[str]:
-    if requirement is None:
-        return []
-
-    req_l = requirement.lower()
-    contradicts_ts = any(
-        marker in req_l
-        for marker in [
-            "javascript only",
-            "plain javascript",
-            "vanilla javascript",
-            "no typescript",
-            "without typescript",
-        ]
-    )
-    if contradicts_ts:
-        return []
-
-    langs = stack.get("language_preferences")
-    if isinstance(langs, list) and any(
-        isinstance(x, str) and x.strip().lower() == "typescript" for x in langs
-    ):
-        return []
-    return [
-        "Field 'stack.language_preferences' must include 'TypeScript' unless requirement contradicts it."
-    ]
+    _ = (stack, requirement)
+    return []
 
 
 def validate_plan_json(plan: Any, requirement: Optional[str] = None) -> Tuple[bool, List[str]]:
@@ -272,5 +253,27 @@ def validate_plan_json(plan: Any, requirement: Optional[str] = None) -> Tuple[bo
             allow_empty=True,
         )
     )
+
+    product_contract = plan.get("product_contract")
+    if product_contract is not None:
+        if not isinstance(product_contract, dict):
+            errors.append("Field 'product_contract' must be an object when provided.")
+        else:
+            for key in ["goals", "acceptance_criteria", "non_goals"]:
+                if key in product_contract and not isinstance(product_contract.get(key), list):
+                    errors.append(f"Field 'product_contract.{key}' must be an array of strings.")
+            for key in ["goals", "acceptance_criteria", "non_goals"]:
+                if key in product_contract and any(not _is_non_empty_str(x) for x in product_contract.get(key, [])):
+                    errors.append(f"Field 'product_contract.{key}' must contain non-empty strings only.")
+
+    ambiguities = plan.get("ambiguities")
+    if ambiguities is not None:
+        errors.extend(
+            _require_list_of_non_empty_strings(
+                ambiguities,
+                "ambiguities",
+                allow_empty=True,
+            )
+        )
 
     return (len(errors) == 0), errors

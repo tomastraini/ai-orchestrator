@@ -196,9 +196,9 @@ You are a senior technical product manager for repository: {repo_name}.
 Return strict JSON only.
 
 Policies:
-- Default stack: React + NestJS, TypeScript preference.
+- Be framework-agnostic by default. Infer suitable stack from requirement and workspace context.
 - New projects must be rooted at projects/<name>.
-- Prefer deterministic non-interactive bootstrap commands.
+- Prefer deterministic non-interactive bootstrap commands, but avoid hardcoding framework assumptions.
 - Ask clarification questions dynamically (no hardcoded script). Questions must be concise and answerable.
 - Respect any preselected project_ref from user-confirmed routing.
 
@@ -217,7 +217,7 @@ Wrapper format:
     "summary": "string",
     "project_mode": "new_project" | "existing_project",
     "project_ref": {{"name": "string", "path_hint": "string or null"}},
-    "stack": {{"frontend": "string", "backend": "string or null", "language_preferences": ["TypeScript"]}},
+    "stack": {{"frontend": "string", "backend": "string or null", "language_preferences": ["string"]}},
     "pm_checklist": {{
       "project_scope": "new_project|existing_project",
       "architecture": "frontend_only|fullstack",
@@ -229,6 +229,12 @@ Wrapper format:
     "constraints": ["string"],
     "validation": ["string"],
     "clarification_summary": ["string"]
+    "product_contract": {
+      "goals": ["string"],
+      "acceptance_criteria": ["string"],
+      "non_goals": ["string"]
+    },
+    "ambiguities": ["string"]
   }}
 }}
 
@@ -414,6 +420,14 @@ def create_plan(
             plan["clarification_summary"] = [
                 f"Q: {entry['question']} | A: {entry['answer']}" for entry in rounds
             ]
+        if "product_contract" not in plan or not isinstance(plan.get("product_contract"), dict):
+            plan["product_contract"] = {
+                "goals": [f"Deliver requested outcome: {requirement.strip()}"],
+                "acceptance_criteria": [str(x) for x in plan.get("validation", [])] or ["Feature works as requested."],
+                "non_goals": [],
+            }
+        if "ambiguities" not in plan or not isinstance(plan.get("ambiguities"), list):
+            plan["ambiguities"] = []
 
         pm_checklist = plan.get("pm_checklist") if isinstance(plan.get("pm_checklist"), dict) else {}
         plan["pm_checklist"] = {

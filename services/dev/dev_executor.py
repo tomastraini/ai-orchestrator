@@ -7,7 +7,12 @@ import time
 from queue import Empty, Queue
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from services.dev.command_policy import assess_risk, normalize_non_interactive
+from services.dev.command_policy import (
+    assess_risk,
+    detect_stack_from_command,
+    normalize_command_for_stack,
+    normalize_non_interactive,
+)
 from shared.dev_schemas import DevTask
 
 
@@ -74,7 +79,7 @@ def classify_failure(stdout: str, stderr: str, exit_code: int) -> str:
     return "none"
 
 
-def rewrite_command_deterministic(command: str, category: str) -> str:
+def rewrite_command_deterministic(command: str, category: str, stack_hint: str = "generic") -> str:
     cmd = command.strip()
     low = cmd.lower()
 
@@ -119,7 +124,7 @@ def rewrite_command_deterministic(command: str, category: str) -> str:
         if " npm " in f" {low} " and "--yes" not in low:
             return f"{cmd} --yes"
 
-    return normalize_non_interactive(cmd)
+    return normalize_command_for_stack(normalize_non_interactive(cmd), stack_hint)
 
 
 def _run_once(
@@ -265,6 +270,7 @@ def execute_dev_tasks(
     log_sink: Optional[Callable[[str], None]] = None,
     heartbeat_seconds: float = 15.0,
     ask_confirmation: Optional[Callable[[str], bool]] = None,
+    stack_hint: str = "generic",
 ) -> Tuple[List[str], List[str], List[str], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
     logs: List[str] = []
     touched_paths: List[str] = []
@@ -306,7 +312,8 @@ def execute_dev_tasks(
         _emit(logs, f"[WHY_THIS_STEP] {task.description}", log_sink)
         llm_reserved = 1 if reserve_last_for_llm else 0
         deterministic_budget = max(1, max_retries - llm_reserved)
-        current_command = task.command
+        inferred_stack = stack_hint or detect_stack_from_command(task.command)
+        current_command = normalize_command_for_stack(task.command, inferred_stack)
         attempted_commands: List[str] = []
         last_error: Optional[str] = None
         last_attempt: Optional[Dict[str, Any]] = None
@@ -335,7 +342,7 @@ def execute_dev_tasks(
                 break
 
             category = str(attempt.get("category", "unknown"))
-            rewritten = rewrite_command_deterministic(current_command, category)
+            rewritten = rewrite_command_deterministic(current_command, category, inferred_stack)
             if rewritten == current_command:
                 # No deterministic fix left; exit deterministic loop.
                 _emit(

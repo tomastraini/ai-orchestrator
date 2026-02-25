@@ -44,8 +44,10 @@ def _build_handoff_pack(handoff: Dict[str, Any]) -> Dict[str, Any]:
             "selected_project_root": str(handoff.get("selected_project_root", "")),
             "workspace_snapshot_hash": str(handoff.get("workspace_snapshot_hash", "")),
             "pending_tasks": handoff.get("pending_tasks", []),
+            "checkpoints": handoff.get("checkpoints", []),
         },
         "memory": handoff.get("memory", {}),
+        "dev_preflight_plan": handoff.get("dev_preflight_plan", {}),
     }
 
 

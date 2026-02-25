@@ -42,9 +42,11 @@ def load_handoff_from_yaml(path: str) -> Optional[Dict[str, Any]]:
         "selected_project_root": str(resume.get("selected_project_root", "")),
         "workspace_snapshot_hash": str(resume.get("workspace_snapshot_hash", "")),
         "pending_tasks": resume.get("pending_tasks", []),
+        "checkpoints": resume.get("checkpoints", []),
         "constraints": goal.get("constraints", []),
         "validation": goal.get("validation", []),
         "memory": payload.get("memory", {}),
+        "dev_preflight_plan": payload.get("dev_preflight_plan", {}),
     }
 
 

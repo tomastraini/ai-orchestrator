@@ -1,7 +1,7 @@
 schema: HandoffPackYAML/v1
 meta:
   request_id: req-checklist-2
-  generated_at: '2026-02-25T17:35:39.927351+00:00'
+  generated_at: '2026-02-25T18:08:22.511756+00:00'
 goal:
   constraints:
   - Do not push
@@ -37,6 +37,12 @@ resume:
   selected_project_root: projects/calculator
   workspace_snapshot_hash: 242042d18bdd07cb0817511a370f3d2f6d0e9093
   pending_tasks: []
+  checkpoints: []
 memory:
   attempted_commands: []
   errors: []
+dev_preflight_plan:
+  status: pending
+  detected_stacks: []
+  validation_commands: []
+  active_project_root: ''

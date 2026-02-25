@@ -6,6 +6,8 @@ import os
 import uuid
 from typing import Any, Dict
 
+from services.dev.handoffpack_reader import load_handoff_with_fallback
+from services.dev_service import DevService
 from services.pm.project_resolver import (
     is_vague_existing_project_request,
     resolve_project_candidates,
@@ -58,8 +60,6 @@ def _confirm_existing_project(candidate: Dict[str, Any]) -> bool:
 def _load_latest_plan_and_handoff(
     context_store: PMContextStore, repo_root: str
 ) -> tuple[Dict[str, Any] | None, Dict[str, Any] | None, str | None]:
-    from services.dev.handoffpack_reader import load_handoff_with_fallback
-
     latest = context_store.get_latest_context()
     if not isinstance(latest, dict):
         return None, None, None
@@ -151,18 +151,6 @@ def run(requirement: str, *, mode: str = "full", from_latest: bool = False) -> i
 
     print("[PHASE] dev_execution")
     print("[DEV] execution starting immediately...")
-    try:
-        from services.dev_service import DevService
-    except ModuleNotFoundError as e:
-        missing = str(e)
-        if "langgraph" in missing:
-            print(
-                "[DEV ERROR] Missing dependency 'langgraph'. "
-                "Install project dependencies first: pip install -r requirements.txt"
-            )
-            return 1
-        raise
-
     dev = DevService(scope_root=PROJECTS_ROOT)
     live_stream_enabled = True
 

@@ -116,6 +116,20 @@ def _normalize_execution_step(
     # Force non-interactive scaffold defaults.
     if "create-react-app" in low and "--use-npm" not in low:
         cmd = f"{cmd} --use-npm"
+    if "create-react-app" in low:
+        # Avoid nested projects/<name>/projects/<name> when cwd already points to project root.
+        tokens = cmd.split()
+        try:
+            cra_idx = next(i for i, tok in enumerate(tokens) if "create-react-app" in tok.lower())
+            if len(tokens) > cra_idx + 1:
+                app_target = tokens[cra_idx + 1]
+                normalized_target = app_target.replace("\\", "/").strip().lstrip("./")
+                if normalized_target.startswith("projects/"):
+                    # Scaffold in current dir when target redundantly includes projects path.
+                    tokens[cra_idx + 1] = "."
+                    cmd = " ".join(tokens)
+        except StopIteration:
+            pass
     if "nest new" in low and "@nestjs/cli" not in low:
         parts = cmd.split()
         app_name = parts[2] if len(parts) >= 3 else "back-end"
@@ -195,6 +209,13 @@ def build_dev_handoff(
         "workspace_snapshot_hash": workspace_snapshot_hash,
         "pending_tasks": [],
         "memory": {"attempted_commands": [], "errors": []},
+        "dev_preflight_plan": {
+            "status": "pending",
+            "detected_stacks": [],
+            "validation_commands": [],
+            "active_project_root": "",
+        },
+        "checkpoints": [],
         "path_aliases": {
             "project_root": project_root,
             "project_name": normalize_rel_path(project_name),

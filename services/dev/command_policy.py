@@ -20,8 +20,34 @@ def normalize_non_interactive(command: str) -> str:
     low = f" {cmd.lower()} "
     if cmd.lower().startswith("npx ") and "--yes" not in low:
         return f"npx --yes {cmd[4:].strip()}"
+    if cmd.lower().startswith("dotnet new") and "--force" not in low:
+        return f"{cmd} --force"
     if "create-react-app" in low and "--use-npm" not in low:
         return f"{cmd} --use-npm"
+    return cmd
+
+
+def detect_stack_from_command(command: str) -> str:
+    low = str(command or "").lower()
+    if "dotnet " in low or ".csproj" in low:
+        return "dotnet"
+    if "bundle " in low or "rails " in low or "gem " in low:
+        return "ruby"
+    if "pip " in low or "python " in low or "pytest" in low:
+        return "python"
+    if "npm " in low or "npx " in low or "yarn " in low or "pnpm " in low:
+        return "node"
+    return "generic"
+
+
+def normalize_command_for_stack(command: str, stack: str) -> str:
+    cmd = normalize_non_interactive(command)
+    low = f" {cmd.lower()} "
+    if stack == "node" and " create-react-app " in low and "--yes" not in low:
+        if cmd.lower().startswith("npx "):
+            return f"npx --yes {cmd[4:].strip()}"
+    if stack == "python" and "pip install" in low and "--disable-pip-version-check" not in low:
+        return f"{cmd} --disable-pip-version-check"
     return cmd
 
 
