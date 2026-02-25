@@ -236,6 +236,28 @@ class DevExecutorTests(unittest.TestCase):
             self.assertEqual(errors, [], msg=str(errors))
             self.assertTrue(any(bool(x.get("evidence", {}).get("smoke_ready")) for x in outcomes), msg=str(outcomes))
 
+    def test_auto_mode_promotes_dev_server_to_service_smoke(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tasks = [
+                DevTask(
+                    id="t10",
+                    description="auto mode should detect long-running dev server",
+                    command="python -c \"import time; print(' npm run dev '); print('VITE v7.3.1 ready in 20 ms'); time.sleep(2)\"",
+                    cwd=".",
+                )
+            ]
+            _, _, errors, _, _, outcomes = execute_dev_tasks(
+                tasks,
+                scope_root=tmp,
+                command_run_mode="auto",
+                timeout_seconds=5,
+                heartbeat_seconds=0.1,
+            )
+            self.assertEqual(errors, [], msg=str(errors))
+            self.assertEqual(len(outcomes), 1)
+            self.assertEqual(outcomes[0].get("run_mode"), "service_smoke")
+            self.assertTrue(bool(outcomes[0].get("evidence", {}).get("smoke_ready")), msg=str(outcomes))
+
 
 if __name__ == "__main__":
     unittest.main()

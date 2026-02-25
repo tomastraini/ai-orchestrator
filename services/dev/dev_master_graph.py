@@ -961,7 +961,7 @@ class DevMasterGraph:
             stack_hint=(state.get("detected_stacks") or ["generic"])[0],
             interactive_prompt_timeout_seconds=60.0,
             constraints=plan_constraints,
-            command_run_mode="terminating",
+            command_run_mode="auto",
         )
         state["logs"].extend(logs)
         state["touched_paths"].extend(touched_paths)
@@ -973,6 +973,29 @@ class DevMasterGraph:
             status = "completed" if outcome.get("status") == "completed" else "blocked"
             DevMasterGraph._set_checklist_status(state, checklist_id, status, evidence=outcome)
         if errors:
+            timed_out_long_running = [
+                attempt
+                for attempt in attempt_history
+                if str(attempt.get("category", "")) == "timeout"
+                and DevMasterGraph._is_long_running_validation_command(str(attempt.get("command", "")))
+            ]
+            if timed_out_long_running:
+                unique_commands = sorted(
+                    {
+                        str(attempt.get("command", "")).strip()
+                        for attempt in timed_out_long_running
+                        if str(attempt.get("command", "")).strip()
+                    }
+                )
+                timeout_note = (
+                    "[BOOTSTRAP_SMOKE_TIMEOUT] One or more bootstrap dev-server commands "
+                    "timed out before a readiness signal was detected. "
+                    "Ensure the command prints a startup-ready indicator (for example, localhost URL or 'ready in'), "
+                    "or move the command to validation if it is not required during bootstrap. "
+                    f"commands={unique_commands}"
+                )
+                state["errors"].append(timeout_note)
+                DevMasterGraph._emit(state, timeout_note)
             state["errors"].extend(errors)
             state["status"] = "bootstrap_failed"
             state["bootstrap_status"] = "failed"

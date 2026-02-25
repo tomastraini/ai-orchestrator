@@ -181,6 +181,41 @@ class DevMasterGraphTests(unittest.TestCase):
         self.assertEqual(state["status"], "completed", msg=str(state.get("errors", [])))
         self.assertTrue(any("[INTERACTIVE_PROMPT]" in line for line in captured), msg=str(captured))
 
+    def test_bootstrap_dev_server_in_auto_mode_does_not_block_execution(self) -> None:
+        plan = self._sample_plan()
+        plan["bootstrap_commands"] = [
+            {
+                "cwd": ".",
+                "command": "python -c \"import time; print(' npm run dev '); print('VITE v7.3.1 ready in 20 ms'); print('Local: http://localhost:5173/'); time.sleep(2)\"",
+                "purpose": "start dev server",
+            }
+        ]
+        graph = DevMasterGraph()
+        with tempfile.TemporaryDirectory() as tmp:
+            state = graph.run(
+                request_id="req-bootstrap-dev-server-auto-1",
+                plan=plan,
+                scope_root=tmp,
+                ask_user=lambda _: "n/a",
+            )
+        self.assertEqual(state["status"], "completed", msg=str(state.get("errors", [])))
+        bootstrap_outcomes = [
+            outcome
+            for outcome in state.get("task_outcomes", [])
+            if str(outcome.get("task_id", "")).startswith("bootstrap_")
+        ]
+        self.assertTrue(bootstrap_outcomes, msg=str(state.get("task_outcomes", [])))
+        self.assertTrue(
+            any(
+                str(outcome.get("run_mode", "")) == "service_smoke"
+                and bool(outcome.get("evidence", {}).get("smoke_ready"))
+                for outcome in bootstrap_outcomes
+            ),
+            msg=str(bootstrap_outcomes),
+        )
+        logs_blob = "\n".join(state.get("logs", []))
+        self.assertIn("[PHASE] implementation", logs_blob)
+
     def test_validation_fails_when_pm_requirement_is_non_executable(self) -> None:
         plan = self._sample_plan()
         plan["validation"] = ["TypeScript compilation yields no type errors"]

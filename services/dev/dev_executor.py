@@ -400,6 +400,8 @@ def _run_once(
             "elapsed_ms": elapsed_ms,
             "stdout": "",
             "stderr": "Command timed out.",
+            "run_mode": run_mode,
+            "smoke_ready": False,
         }
         _emit(logs, f"[TIMEOUT] {task_id} exceeded {timeout_seconds}s", log_sink)
         return logs, f"[TIMEOUT] {task_id}: exceeded {timeout_seconds}s", attempt
@@ -414,6 +416,8 @@ def _run_once(
             "elapsed_ms": elapsed_ms,
             "stdout": "",
             "stderr": str(e),
+            "run_mode": run_mode,
+            "smoke_ready": False,
         }
         _emit(logs, f"[EXCEPTION] {task_id}: {e}", log_sink)
         return logs, f"[EXCEPTION] {task_id}: {e}", attempt
