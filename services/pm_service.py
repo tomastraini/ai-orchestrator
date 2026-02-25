@@ -35,6 +35,16 @@ def _deployment_name() -> str:
     return os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.1-codex-mini")
 
 
+def _ensure_responses_api_available() -> None:
+    if hasattr(client, "responses"):
+        return
+    raise PMServiceError(
+        "Installed OpenAI SDK does not support Azure Responses API on this client. "
+        "Install dependencies with `pip install -r requirements.txt` "
+        "and confirm openai==1.66.3 is installed."
+    )
+
+
 def _make_decision_prompt(repo_name: str, *, force_final: bool) -> str:
     force_line = (
         "You must return status='final_plan'. Do not ask clarification questions."
@@ -127,6 +137,7 @@ def _request_model_decision(
     }
 
     try:
+        _ensure_responses_api_available()
         response = client.responses.create(
             model=_deployment_name(),
             input=[
