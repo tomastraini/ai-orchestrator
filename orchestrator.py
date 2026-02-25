@@ -28,7 +28,8 @@ def _print_plan(plan: Dict[str, Any]) -> None:
 
 def _ask_approval() -> bool:
     ans = input("Approve plan? (y/N): ").strip().lower()
-    return ans in ("y", "yes")
+    normalized = ans.strip("\"'`.,;:! ")
+    return normalized in {"y", "yes", "true", "1", "ok", "approve"}
 
 
 def _ask_clarification(question: str, round_index: int, max_rounds: int) -> str:
