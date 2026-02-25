@@ -7,9 +7,11 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 from config import client
-from shared.schemas import validate_plan_json, PlanJSON
-from services.pm.pm_context_store import PMContextStore
 from services.pm.dev_handoff_store import DevHandoffStore, build_dev_handoff
+from services.pm.pm_context_store import PMContextStore
+from services.workspace.project_index import scan_projects_root
+from shared.pathing import canonical_projects_path
+from shared.schemas import PlanJSON, validate_plan_json
 
 
 class PMServiceError(RuntimeError):
@@ -19,70 +21,15 @@ class PMServiceError(RuntimeError):
 RoundAnswerFn = Callable[[str, int, int], str]
 Checklist = Dict[str, str]
 
-MANDATORY_CHECKLIST_QUESTIONS: List[tuple[str, str]] = [
-    ("project_scope", "Is this for a new project or an existing project? (new/existing)"),
-    ("architecture", "Should this be frontend-only or fullstack? (frontend/fullstack)"),
-    ("backend_required", "Is a backend required? (yes/no)"),
-    ("database_required", "Is a database required? (yes/no)"),
-]
-
-
-def _normalize_checklist_answer(field: str, answer: str) -> str:
-    value = (answer or "").strip().lower()
-    if field == "project_scope":
-        if "existing" in value:
-            return "existing_project"
-        if "new" in value or "create" in value:
-            return "new_project"
-        return "unknown"
-    if field == "architecture":
-        if "full" in value:
-            return "fullstack"
-        if "front" in value:
-            return "frontend_only"
-        return "unspecified"
-    if field in {"backend_required", "database_required"}:
-        if value in {"yes", "y", "true", "required"}:
-            return "yes"
-        if value in {"no", "n", "false", "not required"}:
-            return "no"
-        return "unspecified"
-    return "unspecified"
-
-
-def _extract_checklist_from_rounds(rounds: List[Dict[str, str]]) -> Checklist:
-    collected: Checklist = {}
-    by_question = {
-        question.lower(): field for field, question in MANDATORY_CHECKLIST_QUESTIONS
-    }
-    for round_entry in rounds:
-        q = str(round_entry.get("question", "")).strip().lower()
-        a = str(round_entry.get("answer", "")).strip()
-        if not q or not a:
-            continue
-        field = by_question.get(q)
-        if not field:
-            continue
-        collected[field] = _normalize_checklist_answer(field, a)
-    return collected
-
-
-def _missing_checklist_fields(checklist: Checklist) -> List[str]:
-    missing: List[str] = []
-    for field, _ in MANDATORY_CHECKLIST_QUESTIONS:
-        if checklist.get(field) in {None, "", "unknown", "unspecified"}:
-            missing.append(field)
-    return missing
-
 
 def _contains_any(text: str, needles: List[str]) -> bool:
     return any(needle in text for needle in needles)
 
 
-def _infer_checklist_from_requirement(
-    requirement: str, preselected_project_ref: Optional[Dict[str, str]]
+def _infer_checklist_from_text(
+    text: str, preselected_project_ref: Optional[Dict[str, str]]
 ) -> Checklist:
-    req = (requirement or "").strip().lower()
+    req = (text or "").strip().lower()
     inferred: Checklist = {}
 
     if preselected_project_ref:
@@ -99,20 +46,7 @@ def _infer_checklist_from_requirement(
 
     if _contains_any(req, ["no backend", "without backend", "frontend-only", "frontend only"]):
         inferred["backend_required"] = "no"
-    elif _contains_any(
-        req,
-        [
-            "backend",
-            "api",
-            "server",
-            "nest",
-            "express",
-            "fastapi",
-            "django",
-            "flask",
-            "ruby",
-        ],
-    ):
+    elif _contains_any(req, ["backend", "api", "server", "nest", "express", "fastapi", "django"]):
         inferred["backend_required"] = "yes"
 
     if _contains_any(req, ["no db", "no database", "without database"]):
@@ -137,12 +71,7 @@ def _slugify_project_name(name: str) -> str:
 
 def _ensure_projects_rooted_path(path: Optional[str], project_name: str) -> str:
     default_path = f"projects/{_slugify_project_name(project_name)}"
-    if not isinstance(path, str) or not path.strip():
-        return default_path
-    normalized = path.replace("\\", "/").strip().lstrip("./")
-    if normalized == "projects" or normalized.startswith("projects/"):
-        return normalized
-    return default_path
+    return canonical_projects_path(path, default_path)
 
 
 def _normalize_new_project_plan(
@@ -270,7 +199,8 @@ Policies:
 - Default stack: React + NestJS, TypeScript preference.
 - New projects must be rooted at projects/<name>.
 - Prefer deterministic non-interactive bootstrap commands.
-- Respect mandatory checklist and any preselected project_ref from user-confirmed routing.
+- Ask clarification questions dynamically (no hardcoded script). Questions must be concise and answerable.
+- Respect any preselected project_ref from user-confirmed routing.
 
 Wrapper format:
 {{
@@ -304,10 +234,31 @@ Wrapper format:
 
 Rules:
 - {force_line}
-- If status=needs_clarification => plan must be null.
+- If status=needs_clarification => provide exactly one concrete question and plan must be null.
 - If status=final_plan => question must be empty.
 - No extra keys.
 """
+
+
+def _parse_wrapper_json(raw_text: str) -> Dict[str, Any]:
+    try:
+        payload = json.loads(raw_text)
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        pass
+
+    start = raw_text.find("{")
+    end = raw_text.rfind("}")
+    if start >= 0 and end > start:
+        maybe_json = raw_text[start : end + 1]
+        try:
+            payload = json.loads(maybe_json)
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            pass
+    raise PMServiceError(f"Failed to parse PM wrapper JSON:\n{raw_text}")
 
 
 def _request_model_decision(
@@ -318,6 +269,7 @@ def _request_model_decision(
     forced_project_ref: Optional[Dict[str, str]],
     *,
     force_final: bool,
+    workspace_context: Dict[str, Any],
 ) -> Dict[str, Any]:
     system_prompt = _make_decision_prompt(repo_name, force_final=force_final)
     recent_rounds = rounds[-2:] if len(rounds) > 2 else rounds
@@ -330,8 +282,9 @@ def _request_model_decision(
         "clarification_rounds_recent": recent_rounds,
         "clarification_rounds_summary": summary_rounds,
         "clarification_round_count": len(rounds),
-        "mandatory_checklist": checklist,
+        "inferred_checklist": checklist,
         "preselected_project_ref": forced_project_ref or None,
+        "workspace_context": workspace_context,
         "max_clarification_rounds": 3,
         "force_final": force_final,
     }
@@ -349,12 +302,7 @@ def _request_model_decision(
         raise PMServiceError(f"Azure call failed: {e}") from e
 
     raw_text = _extract_output_text(response)
-    try:
-        payload = json.loads(raw_text)
-    except Exception as e:
-        raise PMServiceError(
-            f"Failed to parse PM wrapper JSON:\n{raw_text}"
-        ) from e
+    payload = _parse_wrapper_json(raw_text)
 
     if not isinstance(payload, dict):
         raise PMServiceError(f"PM wrapper output must be an object. Got: {payload!r}")
@@ -395,27 +343,18 @@ def create_plan(
                 if q and a:
                     rounds.append({"question": q, "answer": a})
 
-    checklist = _infer_checklist_from_requirement(requirement, preselected_project_ref)
-    checklist.update(_extract_checklist_from_rounds(rounds))
-    for field, question in MANDATORY_CHECKLIST_QUESTIONS:
-        if field in checklist and checklist[field] not in {"unknown", "unspecified"}:
-            continue
-        if ask_user is None:
-            raise PMServiceError(
-                "PM mandatory checklist requires ask_user callback for stack-critical questions."
+    checklist = _infer_checklist_from_text(requirement, preselected_project_ref)
+    for entry in rounds:
+        checklist.update(
+            _infer_checklist_from_text(
+                f"{str(entry.get('question', ''))} {str(entry.get('answer', ''))}",
+                preselected_project_ref,
             )
-        answer = ask_user(question, 0, max_rounds).strip()
-        if not answer:
-            raise PMServiceError("Mandatory checklist answer cannot be empty.")
-        context_store.append_round(request_id=request_id, question=question, answer=answer)
-        rounds.append({"question": question, "answer": answer})
-        checklist[field] = _normalize_checklist_answer(field, answer)
-
-    missing = _missing_checklist_fields(checklist)
-    if missing:
-        raise PMServiceError(
-            f"PM mandatory checklist incomplete for fields: {', '.join(missing)}."
         )
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    projects_root = os.path.join(repo_root, "projects")
+    workspace_context = scan_projects_root(projects_root)
 
     model_calls = 0
 
@@ -433,6 +372,7 @@ def create_plan(
             checklist=checklist,
             forced_project_ref=preselected_project_ref,
             force_final=force_final,
+            workspace_context=workspace_context,
         )
         model_calls += 1
 
@@ -454,8 +394,14 @@ def create_plan(
                 raise PMServiceError("Clarification answer cannot be empty.")
             context_store.append_round(request_id=request_id, question=question, answer=answer)
             rounds.append({"question": question, "answer": answer})
-            checklist = _infer_checklist_from_requirement(requirement, preselected_project_ref)
-            checklist.update(_extract_checklist_from_rounds(rounds))
+            checklist = _infer_checklist_from_text(requirement, preselected_project_ref)
+            for entry in rounds:
+                checklist.update(
+                    _infer_checklist_from_text(
+                        f"{str(entry.get('question', ''))} {str(entry.get('answer', ''))}",
+                        preselected_project_ref,
+                    )
+                )
             continue
 
         plan = decision.get("plan")
@@ -469,11 +415,12 @@ def create_plan(
                 f"Q: {entry['question']} | A: {entry['answer']}" for entry in rounds
             ]
 
+        pm_checklist = plan.get("pm_checklist") if isinstance(plan.get("pm_checklist"), dict) else {}
         plan["pm_checklist"] = {
-            "project_scope": checklist.get("project_scope", "unknown"),
-            "architecture": checklist.get("architecture", "unspecified"),
-            "backend_required": checklist.get("backend_required", "unspecified"),
-            "database_required": checklist.get("database_required", "unspecified"),
+            "project_scope": str(checklist.get("project_scope") or pm_checklist.get("project_scope") or "new_project"),
+            "architecture": str(checklist.get("architecture") or pm_checklist.get("architecture") or "fullstack"),
+            "backend_required": str(checklist.get("backend_required") or pm_checklist.get("backend_required") or "yes"),
+            "database_required": str(checklist.get("database_required") or pm_checklist.get("database_required") or "no"),
         }
         plan = _normalize_new_project_plan(plan, checklist)
         plan = _normalize_existing_project_plan(plan, preselected_project_ref)
@@ -489,7 +436,6 @@ def create_plan(
         context_store.save_final_plan(request_id=request_id, plan=plan)
         handoff = build_dev_handoff(request_id=request_id, plan=plan, rounds=rounds)
         context_store.save_dev_handoff(request_id=request_id, handoff=handoff)
-        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         DevHandoffStore(repo_root=repo_root).write_latest(handoff)
         return plan
 

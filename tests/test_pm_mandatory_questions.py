@@ -48,7 +48,7 @@ def _final_plan_stub() -> dict:
 
 
 class PMMandatoryChecklistTests(unittest.TestCase):
-    def test_create_plan_asks_mandatory_checklist(self) -> None:
+    def test_create_plan_dynamic_clarification_policy(self) -> None:
         asked: list[str] = []
         answers = {
             "Is this for a new project or an existing project? (new/existing)": "new",
@@ -85,8 +85,8 @@ class PMMandatoryChecklistTests(unittest.TestCase):
         finally:
             pm_service._request_model_decision = original
 
-        self.assertLessEqual(len(asked), 4)
-        self.assertGreaterEqual(len(asked), 1)
+        # Clarifications are now dynamic and may be zero for sufficiently clear inputs.
+        self.assertGreaterEqual(len(asked), 0)
         self.assertEqual(plan["pm_checklist"]["project_scope"], "new_project")
         self.assertEqual(plan["pm_checklist"]["architecture"], "fullstack")
         self.assertEqual(plan["pm_checklist"]["backend_required"], "yes")

@@ -44,6 +44,11 @@ class PMContextStore:
         with open(self.store_path, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)
 
+    def get_latest_context(self) -> Optional[Dict[str, Any]]:
+        data = self._read_all()
+        entry = data.get("latest_context")
+        return entry if isinstance(entry, dict) else None
+
     def load_context(self, request_id: str, original_requirement: Optional[str] = None) -> Dict[str, Any]:
         data = self._read_all()
         entry = data.get("latest_context")

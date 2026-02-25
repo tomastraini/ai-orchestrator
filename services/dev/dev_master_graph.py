@@ -19,6 +19,7 @@ class DevGraphState(TypedDict, total=False):
     handoff: Dict[str, Any]
     scope_root: str
     project_name: str
+    project_root: str
     status: str
     current_step: str
     bootstrap_tasks: List[DevTask]
@@ -136,9 +137,13 @@ class DevMasterGraph:
         handoff = state.get("handoff") or {}
         project_root = handoff.get("project_root")
         if isinstance(project_root, str) and "/" in project_root:
-            state["project_name"] = project_root.replace("\\", "/").rstrip("/").split("/")[-1]
+            normalized_root = project_root.replace("\\", "/").strip().lstrip("./")
+            state["project_root"] = normalized_root
+            state["project_name"] = normalized_root.rstrip("/").split("/")[-1]
         else:
-            state["project_name"] = derive_project_name(state["plan"])
+            project_name = derive_project_name(state["plan"])
+            state["project_name"] = project_name
+            state["project_root"] = f"projects/{project_name}"
         DevMasterGraph._emit(state, f"[INGEST] project='{state['project_name']}'")
         state["phase_status"]["ingest_pm_plan"] = "completed"
         return state
@@ -250,30 +255,12 @@ class DevMasterGraph:
     def _prepare_execution_steps(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "prepare_execution_steps"
         DevMasterGraph._emit(state, "[PHASE_START] prepare_execution_steps")
-        project_dir = os.path.join(state["scope_root"], state["project_name"])
+        project_root = str(state.get("project_root", f"projects/{state.get('project_name', 'project')}"))
+        rel = project_root.split("/", 1)[1] if project_root.startswith("projects/") else project_root
+        project_dir = os.path.join(state["scope_root"], rel)
         os.makedirs(project_dir, exist_ok=True)
         state["touched_paths"].append(project_dir)
         DevMasterGraph._emit(state, f"[PREPARE] ensured project dir {project_dir}")
-
-        # Ensure suggested folder layout exists before bootstrap commands run.
-        handoff = state.get("handoff") or {}
-        structure_plan = handoff.get("structure_plan")
-        if isinstance(structure_plan, list):
-            for entry in structure_plan:
-                if not isinstance(entry, dict):
-                    continue
-                raw_path = str(entry.get("path", "")).strip()
-                if not raw_path:
-                    continue
-                normalized = raw_path.replace("\\", "/")
-                if normalized.startswith("projects/"):
-                    rel = normalized.split("/", 1)[1]
-                    target_dir = os.path.join(state["scope_root"], rel)
-                else:
-                    target_dir = os.path.join(state["scope_root"], normalized)
-                os.makedirs(target_dir, exist_ok=True)
-                state["touched_paths"].append(target_dir)
-                DevMasterGraph._emit(state, f"[PREPARE] ensured structure dir {target_dir}")
         state["phase_status"]["prepare_execution_steps"] = "completed"
         return state
 
@@ -288,6 +275,7 @@ class DevMasterGraph:
             max_retries=int(state.get("max_retries", 5)),
             reserve_last_for_llm=True,
             log_sink=state.get("log_sink"),
+            ask_confirmation=(lambda q: bool(state.get("ask_user")(q).strip().lower() in {"y", "yes", "true", "1"})) if callable(state.get("ask_user")) else None,
         )
         state["logs"].extend(logs)
         state["touched_paths"].extend(touched_paths)
@@ -341,6 +329,7 @@ class DevMasterGraph:
             "command": pending_llm_task["last_command"],
             "error": pending_llm_task["last_error"],
             "last_attempt": pending_llm_task["last_attempt"],
+            "attempted_commands": pending_llm_task.get("attempted_commands", []),
             "scope_constraint": "All commands must remain within ./projects scope.",
             "push_constraint": "git push is blocked.",
         }
@@ -395,10 +384,13 @@ class DevMasterGraph:
         return state
 
     @staticmethod
-    def _resolve_implementation_path(scope_root: str, expected_path_hint: str) -> str:
+    def _resolve_implementation_path(scope_root: str, project_root: str, expected_path_hint: str) -> str:
         path = (expected_path_hint or "").replace("\\", "/").strip().lstrip("./")
-        while path.startswith("projects/"):
+        if path.startswith("projects/"):
             path = path.split("/", 1)[1] if "/" in path else ""
+        elif project_root.startswith("projects/"):
+            root_rel = project_root.split("/", 1)[1]
+            path = f"{root_rel}/{path}".strip("/")
         safe_path = os.path.abspath(os.path.join(scope_root, path))
         scope_abs = os.path.abspath(scope_root)
         if os.path.commonpath([scope_abs, safe_path]) != scope_abs:
@@ -434,15 +426,15 @@ class DevMasterGraph:
         if pass_index == 1:
             if not os.path.exists(safe_target):
                 with open(safe_target, "w", encoding="utf-8") as fh:
-                    fh.write(DevMasterGraph._comment_for_path(safe_target, f"TODO: {details or 'initial implementation skeleton'}"))
-                return "created_file", "skeleton"
-            with open(safe_target, "a", encoding="utf-8") as fh:
-                fh.write(DevMasterGraph._comment_for_path(safe_target, f"TODO: {details or 'first refinement'}"))
-            return "updated_file", "pass=1_refinement"
+                    fh.write(DevMasterGraph._comment_for_path(safe_target, f"IMPLEMENT: {details or 'initial implementation'}"))
+                return "created_file", "initial_implementation"
+            return "observed_file", "existing_file_preserved"
 
-        with open(safe_target, "a", encoding="utf-8") as fh:
-            fh.write(DevMasterGraph._comment_for_path(safe_target, f"TODO: {details or 'second refinement'}"))
-        return "updated_file", "pass=2_refinement"
+        if os.path.exists(safe_target) and os.path.getsize(safe_target) == 0:
+            with open(safe_target, "w", encoding="utf-8") as fh:
+                fh.write(DevMasterGraph._comment_for_path(safe_target, f"IMPLEMENT: {details or 'refinement implementation'}"))
+            return "updated_file", "filled_empty_file"
+        return "observed_file", "no_unnecessary_mutation"
 
     @staticmethod
     def _execute_implementation_phase(state: DevGraphState) -> DevGraphState:
@@ -457,6 +449,7 @@ class DevMasterGraph:
             return state
 
         scope_root = state["scope_root"]
+        project_root = str(state.get("project_root", f"projects/{state.get('project_name', 'project')}"))
         targets = state.get("implementation_targets", [])
         total_actions = 0
         try:
@@ -465,14 +458,14 @@ class DevMasterGraph:
                 DevMasterGraph._emit(state, f"[PHASE] {pass_label}")
                 DevMasterGraph._emit(
                     state,
-                    f"[WHY_THIS_STEP] pass={pass_index} incremental update strategy for target files"
+                    f"[WHY_THIS_STEP] pass={pass_index} iterative target execution with context-aware mutation policy"
                 )
                 pass_actions = 0
                 for target in targets:
                     expected = str(target.get("expected_path_hint", ""))
                     modification_type = str(target.get("modification_type", "")).lower()
                     details = str(target.get("details", "")).strip()
-                    safe_target = DevMasterGraph._resolve_implementation_path(scope_root, expected)
+                    safe_target = DevMasterGraph._resolve_implementation_path(scope_root, project_root, expected)
                     action, action_note = DevMasterGraph._apply_target_in_pass(
                         safe_target=safe_target,
                         modification_type=modification_type,

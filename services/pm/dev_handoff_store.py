@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 from datetime import datetime, timezone
 from typing import Any, Dict, List
+
+from services.pm.handoffpack_writer import write_handoffpack_yaml
+from services.workspace.project_index import scan_projects_root
+from shared.pathing import canonical_projects_path, normalize_rel_path
 
 
 def _utc_now_iso() -> str:
@@ -11,14 +16,7 @@ def _utc_now_iso() -> str:
 
 
 def _normalize_projects_path(path: str, default_path: str) -> str:
-    raw = (path or "").replace("\\", "/").strip().lstrip("./")
-    if not raw:
-        raw = default_path
-    if not raw.startswith("projects/"):
-        raw = default_path
-    while "/projects/" in raw:
-        raw = raw.replace("/projects/", "/")
-    return raw
+    return canonical_projects_path(path, default_path)
 
 
 def _contains_path_marker(path: str, markers: List[str]) -> bool:
@@ -149,6 +147,7 @@ def build_dev_handoff(
         slug = "-".join(part for part in slug.split("-") if part) or "project"
         project_root = f"projects/{slug}"
     project_root = _normalize_projects_path(project_root, project_root)
+    project_name = project_root.split("/", 1)[1] if project_root.startswith("projects/") else project_root
 
     structure_plan = _derive_structure_plan(project_root, plan)
     wants_frontend = any(
@@ -176,16 +175,31 @@ def build_dev_handoff(
                     purpose=str(cmd.get("purpose", "bootstrap")),
                 )
             )
+    workspace_context = scan_projects_root(
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "projects")
+    )
+    snapshot_source = json.dumps(workspace_context, sort_keys=True)
+    workspace_snapshot_hash = hashlib.sha1(snapshot_source.encode("utf-8")).hexdigest()
 
     return {
         "request_id": request_id,
         "project_root": project_root,
+        "selected_project_root": project_root,
         "structure_plan": structure_plan,
         "execution_steps": execution_steps,
         "pm_checklist": plan.get("pm_checklist", {}),
         "constraints": [str(x) for x in plan.get("constraints", [])],
         "validation": [str(x) for x in plan.get("validation", [])],
         "clarifications": rounds,
+        "workspace_context": workspace_context,
+        "workspace_snapshot_hash": workspace_snapshot_hash,
+        "pending_tasks": [],
+        "memory": {"attempted_commands": [], "errors": []},
+        "path_aliases": {
+            "project_root": project_root,
+            "project_name": normalize_rel_path(project_name),
+        },
+        "command_policy": {"risk_confirmation": True, "non_interactive": True},
         "generated_at": _utc_now_iso(),
     }
 
@@ -199,3 +213,5 @@ class DevHandoffStore:
         os.makedirs(os.path.dirname(self.store_path), exist_ok=True)
         with open(self.store_path, "w", encoding="utf-8") as fh:
             json.dump({"latest_handoff": handoff}, fh, indent=2)
+        base_path = self.store_path.replace(".json", "")
+        write_handoffpack_yaml(base_path, handoff)

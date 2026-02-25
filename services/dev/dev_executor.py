@@ -7,6 +7,7 @@ import time
 from queue import Empty, Queue
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from services.dev.command_policy import assess_risk, normalize_non_interactive
 from shared.dev_schemas import DevTask
 
 
@@ -118,7 +119,7 @@ def rewrite_command_deterministic(command: str, category: str) -> str:
         if " npm " in f" {low} " and "--yes" not in low:
             return f"{cmd} --yes"
 
-    return cmd
+    return normalize_non_interactive(cmd)
 
 
 def _run_once(
@@ -263,6 +264,7 @@ def execute_dev_tasks(
     timeout_seconds: int = 900,
     log_sink: Optional[Callable[[str], None]] = None,
     heartbeat_seconds: float = 15.0,
+    ask_confirmation: Optional[Callable[[str], bool]] = None,
 ) -> Tuple[List[str], List[str], List[str], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
     logs: List[str] = []
     touched_paths: List[str] = []
@@ -281,6 +283,16 @@ def execute_dev_tasks(
         if _is_blocked_command(task.command):
             errors.append(f"[BLOCKED] {task.id}: outbound push is disabled ('{task.command}')")
             break
+        is_risky, reason = assess_risk(task.command)
+        if is_risky:
+            if callable(ask_confirmation):
+                approved = bool(ask_confirmation(f"Approve risky command for {task.id}? {task.command} ({reason})"))
+                if not approved:
+                    errors.append(f"[BLOCKED] {task.id}: risky command not approved ('{task.command}')")
+                    break
+            else:
+                errors.append(f"[BLOCKED] {task.id}: risky command requires confirmation ('{task.command}')")
+                break
 
         try:
             cwd = _resolve_cwd(scope_abs, task.cwd or ".")
@@ -295,11 +307,13 @@ def execute_dev_tasks(
         llm_reserved = 1 if reserve_last_for_llm else 0
         deterministic_budget = max(1, max_retries - llm_reserved)
         current_command = task.command
+        attempted_commands: List[str] = []
         last_error: Optional[str] = None
         last_attempt: Optional[Dict[str, Any]] = None
 
         for attempt_idx in range(1, deterministic_budget + 1):
             strategy = "original" if attempt_idx == 1 else "deterministic_rewrite"
+            attempted_commands.append(current_command)
             attempt_logs, run_error, attempt = _run_once(
                 task_id=task.id,
                 task_kind=task.kind,
@@ -354,6 +368,7 @@ def execute_dev_tasks(
                     "last_command": current_command,
                     "last_error": last_error,
                     "last_attempt": last_attempt,
+                    "attempted_commands": attempted_commands,
                     "max_retries": max_retries,
                 }
                 _emit(
