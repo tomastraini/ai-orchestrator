@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Dict, List, TypedDict
+from typing import Any, Callable, Dict, List, Tuple, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
@@ -39,6 +39,8 @@ class DevGraphState(TypedDict, total=False):
     implementation_status: str
     llm_calls_used: int
     llm_call_budget: int
+    phase_status: Dict[str, str]
+    implementation_pass_statuses: List[str]
 
 
 class DevMasterGraph:
@@ -97,6 +99,16 @@ class DevMasterGraph:
             "implementation_status": "pending",
             "llm_calls_used": 0,
             "llm_call_budget": max(0, int(max_model_calls_per_run)),
+            "phase_status": {
+                "ingest_pm_plan": "pending",
+                "derive_dev_todos": "pending",
+                "ask_cli_clarifications_if_needed": "pending",
+                "prepare_execution_steps": "pending",
+                "execute_bootstrap_phase": "pending",
+                "execute_implementation_phase": "pending",
+                "finalize_result": "pending",
+            },
+            "implementation_pass_statuses": [],
         }
         result = self._compiled_graph.invoke(initial_state)
         result.pop("ask_user", None)
@@ -106,6 +118,7 @@ class DevMasterGraph:
     @staticmethod
     def _ingest_pm_plan(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "ingest_pm_plan"
+        state["logs"].append("[PHASE_START] ingest_pm_plan")
         handoff = state.get("handoff") or {}
         project_root = handoff.get("project_root")
         if isinstance(project_root, str) and "/" in project_root:
@@ -113,11 +126,13 @@ class DevMasterGraph:
         else:
             state["project_name"] = derive_project_name(state["plan"])
         state["logs"].append(f"[INGEST] project='{state['project_name']}'")
+        state["phase_status"]["ingest_pm_plan"] = "completed"
         return state
 
     @staticmethod
     def _derive_dev_todos(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "derive_dev_todos"
+        state["logs"].append("[PHASE_START] derive_dev_todos")
         plan = state["plan"]
         handoff = state.get("handoff") or {}
         bootstrap_tasks: List[DevTask] = []
@@ -182,16 +197,19 @@ class DevMasterGraph:
             f"{len(bootstrap_tasks)} implementation_targets={len(implementation_targets)} "
             f"validation_tasks={len(validation_tasks)}"
         )
+        state["phase_status"]["derive_dev_todos"] = "completed"
         return state
 
     @staticmethod
     def _ask_cli_clarifications_if_needed(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "ask_cli_clarifications_if_needed"
+        state["logs"].append("[PHASE_START] ask_cli_clarifications_if_needed")
         plan = state["plan"]
         ask_user = state.get("ask_user")
 
         if not callable(ask_user):
             state["logs"].append("[CLARIFY] no CLI callback provided")
+            state["phase_status"]["ask_cli_clarifications_if_needed"] = "completed"
             return state
 
         project_mode = plan.get("project_mode")
@@ -210,11 +228,13 @@ class DevMasterGraph:
             state["logs"].append("[CLARIFY] existing project path clarified via CLI")
         else:
             state["logs"].append("[CLARIFY] no additional questions needed")
+        state["phase_status"]["ask_cli_clarifications_if_needed"] = "completed"
         return state
 
     @staticmethod
     def _prepare_execution_steps(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "prepare_execution_steps"
+        state["logs"].append("[PHASE_START] prepare_execution_steps")
         project_dir = os.path.join(state["scope_root"], state["project_name"])
         os.makedirs(project_dir, exist_ok=True)
         state["touched_paths"].append(project_dir)
@@ -239,11 +259,13 @@ class DevMasterGraph:
                 os.makedirs(target_dir, exist_ok=True)
                 state["touched_paths"].append(target_dir)
                 state["logs"].append(f"[PREPARE] ensured structure dir {target_dir}")
+        state["phase_status"]["prepare_execution_steps"] = "completed"
         return state
 
     @staticmethod
     def _execute_bootstrap_phase(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "execute_bootstrap_phase"
+        state["logs"].append("[PHASE_START] execute_bootstrap_phase")
         state["logs"].append("[PHASE] bootstrap")
         logs, touched_paths, errors, attempt_history, pending_llm_task = execute_dev_tasks(
             state.get("bootstrap_tasks", []),
@@ -260,10 +282,15 @@ class DevMasterGraph:
             state["status"] = "bootstrap_failed"
             state["bootstrap_status"] = "failed"
             state["last_error"] = errors[-1]
+            state["phase_status"]["execute_bootstrap_phase"] = "failed"
             return state
 
         if pending_llm_task is None:
             state["bootstrap_status"] = "completed"
+            state["logs"].append(
+                f"[PHASE_SUMMARY] bootstrap attempts={len(attempt_history)} recovered=deterministic_or_clean"
+            )
+            state["phase_status"]["execute_bootstrap_phase"] = "completed"
             return state
 
         llm_corrector = state.get("llm_corrector")
@@ -274,6 +301,7 @@ class DevMasterGraph:
             state["status"] = "bootstrap_failed"
             state["bootstrap_status"] = "failed"
             state["last_error"] = state["errors"][-1]
+            state["phase_status"]["execute_bootstrap_phase"] = "failed"
             return state
 
         if int(state.get("llm_calls_used", 0)) >= int(state.get("llm_call_budget", 0)):
@@ -286,6 +314,7 @@ class DevMasterGraph:
             state["status"] = "bootstrap_failed"
             state["bootstrap_status"] = "failed"
             state["last_error"] = state["errors"][-1]
+            state["phase_status"]["execute_bootstrap_phase"] = "failed"
             return state
 
         correction_input = {
@@ -312,9 +341,13 @@ class DevMasterGraph:
             state["status"] = "bootstrap_failed"
             state["bootstrap_status"] = "failed"
             state["last_error"] = state["errors"][-1]
+            state["phase_status"]["execute_bootstrap_phase"] = "failed"
             return state
 
         state["logs"].append(f"[LLM_REWRITE] {pending_llm_task['task_id']} -> {corrected_command}")
+        state["logs"].append(
+            f"[WHY_RETRY] deterministic retries exhausted for task={pending_llm_task['task_id']}, using llm_rewrite"
+        )
         recover_logs, recover_error, recover_attempt = execute_single_recovery_command(
             task_id=str(pending_llm_task["task_id"]),
             task_kind=str(pending_llm_task["task_kind"]),
@@ -332,8 +365,13 @@ class DevMasterGraph:
             state["status"] = "bootstrap_failed"
             state["bootstrap_status"] = "failed"
             state["last_error"] = recover_error
+            state["phase_status"]["execute_bootstrap_phase"] = "failed"
             return state
         state["bootstrap_status"] = "completed"
+        state["logs"].append(
+            f"[PHASE_SUMMARY] bootstrap attempts={len(state.get('attempt_history', []))} recovered=llm"
+        )
+        state["phase_status"]["execute_bootstrap_phase"] = "completed"
         return state
 
     @staticmethod
@@ -348,58 +386,104 @@ class DevMasterGraph:
         return safe_path
 
     @staticmethod
+    def _comment_for_path(path: str, text: str) -> str:
+        ext = os.path.splitext(path)[1].lower()
+        if ext in {".ts", ".tsx", ".js", ".jsx", ".java", ".c", ".cpp", ".go", ".rs"}:
+            return f"// {text}\n"
+        if ext in {".py", ".sh", ".rb", ".yml", ".yaml"}:
+            return f"# {text}\n"
+        return f"{text}\n"
+
+    @staticmethod
+    def _apply_target_in_pass(
+        *,
+        safe_target: str,
+        modification_type: str,
+        details: str,
+        pass_index: int,
+    ) -> Tuple[str, str]:
+        if modification_type in {"create_directory", "mkdir", "create_dir"}:
+            os.makedirs(safe_target, exist_ok=True)
+            return "ensured_directory", f"pass={pass_index}"
+
+        if os.path.splitext(safe_target)[1] == "":
+            os.makedirs(safe_target, exist_ok=True)
+            return "ensured_path", f"pass={pass_index}"
+
+        os.makedirs(os.path.dirname(safe_target), exist_ok=True)
+        if pass_index == 1:
+            if not os.path.exists(safe_target):
+                with open(safe_target, "w", encoding="utf-8") as fh:
+                    fh.write(DevMasterGraph._comment_for_path(safe_target, f"TODO: {details or 'initial implementation skeleton'}"))
+                return "created_file", "skeleton"
+            with open(safe_target, "a", encoding="utf-8") as fh:
+                fh.write(DevMasterGraph._comment_for_path(safe_target, f"TODO: {details or 'first refinement'}"))
+            return "updated_file", "pass=1_refinement"
+
+        with open(safe_target, "a", encoding="utf-8") as fh:
+            fh.write(DevMasterGraph._comment_for_path(safe_target, f"TODO: {details or 'second refinement'}"))
+        return "updated_file", "pass=2_refinement"
+
+    @staticmethod
     def _execute_implementation_phase(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "execute_implementation_phase"
+        state["logs"].append("[PHASE_START] execute_implementation_phase")
         state["logs"].append("[PHASE] implementation")
 
         if state.get("bootstrap_status") == "failed":
             state["implementation_status"] = "impl_skipped"
             state["logs"].append("[IMPLEMENTATION] skipped due to bootstrap_failed")
+            state["phase_status"]["execute_implementation_phase"] = "skipped"
             return state
 
         scope_root = state["scope_root"]
         targets = state.get("implementation_targets", [])
+        total_actions = 0
         try:
-            for target in targets:
-                expected = str(target.get("expected_path_hint", ""))
-                modification_type = str(target.get("modification_type", "")).lower()
-                details = str(target.get("details", "")).strip()
-                safe_target = DevMasterGraph._resolve_implementation_path(scope_root, expected)
-
-                if modification_type in {"create_directory", "mkdir", "create_dir"}:
-                    os.makedirs(safe_target, exist_ok=True)
+            for pass_index in (1, 2):
+                pass_label = f"implementation_pass_{pass_index}"
+                state["logs"].append(f"[PHASE] {pass_label}")
+                state["logs"].append(
+                    f"[WHY_THIS_STEP] pass={pass_index} incremental update strategy for target files"
+                )
+                pass_actions = 0
+                for target in targets:
+                    expected = str(target.get("expected_path_hint", ""))
+                    modification_type = str(target.get("modification_type", "")).lower()
+                    details = str(target.get("details", "")).strip()
+                    safe_target = DevMasterGraph._resolve_implementation_path(scope_root, expected)
+                    action, action_note = DevMasterGraph._apply_target_in_pass(
+                        safe_target=safe_target,
+                        modification_type=modification_type,
+                        details=details,
+                        pass_index=pass_index,
+                    )
                     state["touched_paths"].append(safe_target)
-                    state["logs"].append(f"[IMPLEMENTATION] ensured directory {safe_target}")
-                    continue
-
-                if os.path.splitext(safe_target)[1] == "":
-                    os.makedirs(safe_target, exist_ok=True)
-                    state["touched_paths"].append(safe_target)
-                    state["logs"].append(f"[IMPLEMENTATION] ensured path {safe_target}")
-                    continue
-
-                os.makedirs(os.path.dirname(safe_target), exist_ok=True)
-                if not os.path.exists(safe_target):
-                    with open(safe_target, "w", encoding="utf-8") as fh:
-                        fh.write(f"# TODO: {details or 'implementation placeholder'}\n")
-                    state["logs"].append(f"[IMPLEMENTATION] created file {safe_target}")
-                else:
-                    with open(safe_target, "a", encoding="utf-8") as fh:
-                        fh.write(f"\n# TODO: {details or 'implementation refinement'}\n")
-                    state["logs"].append(f"[IMPLEMENTATION] updated file {safe_target}")
-                state["touched_paths"].append(safe_target)
+                    state["logs"].append(
+                        f"[IMPLEMENTATION] pass={pass_index} action={action} target={safe_target} note={action_note}"
+                    )
+                    pass_actions += 1
+                    total_actions += 1
+                state["implementation_pass_statuses"].append(f"{pass_label}:completed:{pass_actions}")
+                state["logs"].append(
+                    f"[PASS_SUMMARY] {pass_label} actions={pass_actions} touched_total={len(state.get('touched_paths', []))}"
+                )
         except Exception as e:
             state["errors"].append(f"[IMPLEMENTATION_ERROR] {e}")
             state["implementation_status"] = "failed"
             state["status"] = "implementation_failed"
+            state["phase_status"]["execute_implementation_phase"] = "failed"
             return state
 
         state["implementation_status"] = "completed"
+        state["phase_status"]["execute_implementation_phase"] = "completed"
+        state["logs"].append(f"[IMPLEMENTATION_SUMMARY] total_actions={total_actions}")
         return state
 
     @staticmethod
     def _finalize_result(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "finalize_result"
+        state["logs"].append("[PHASE_START] finalize_result")
         if state.get("status") in {"bootstrap_failed", "implementation_failed"}:
             pass
         elif state.get("implementation_status") == "impl_skipped":
@@ -408,7 +492,10 @@ class DevMasterGraph:
             state["status"] = "completed"
         err_count = len(state.get("errors", []))
         state["final_summary"] = (
-            f"Developer master finished with status={state['status']} and errors={err_count}."
+            f"Developer master finished with status={state['status']} and errors={err_count}. "
+            f"phase_status={state.get('phase_status', {})} "
+            f"pass_status={state.get('implementation_pass_statuses', [])}"
         )
         state["logs"].append(f"[FINAL] {state['final_summary']}")
+        state["phase_status"]["finalize_result"] = "completed"
         return state

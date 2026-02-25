@@ -62,6 +62,7 @@ def run(requirement: str) -> int:
     repo_root = os.path.dirname(__file__)
     context_store = PMContextStore(repo_root=repo_root)
     print(f"[REQUEST ID] {request_id}")
+    print("[PHASE] pm_planning")
     preselected_project_ref: Dict[str, str] | None = None
 
     if is_vague_existing_project_request(requirement):
@@ -95,11 +96,13 @@ def run(requirement: str) -> int:
     _print_plan(state.plan)
 
     # 2) Manual approval gate (deterministic)
+    print("[PHASE] approval_gate")
     if not _ask_approval():
         print("Plan not approved. Exiting.")
         return 0
 
     # 3) Dev executes plan (engineering brain)
+    print("[PHASE] dev_execution")
     dev = DevService(scope_root=PROJECTS_ROOT)
     result = dev.execute_plan(
         state.plan,

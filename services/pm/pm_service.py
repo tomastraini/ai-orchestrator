@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
@@ -74,6 +75,58 @@ def _missing_checklist_fields(checklist: Checklist) -> List[str]:
     return missing
 
 
+def _contains_any(text: str, needles: List[str]) -> bool:
+    return any(needle in text for needle in needles)
+
+
+def _infer_checklist_from_requirement(
+    requirement: str, preselected_project_ref: Optional[Dict[str, str]]
+) -> Checklist:
+    req = (requirement or "").strip().lower()
+    inferred: Checklist = {}
+
+    if preselected_project_ref:
+        inferred["project_scope"] = "existing_project"
+    elif _contains_any(req, ["new project", "from scratch", "scaffold", "create "]):
+        inferred["project_scope"] = "new_project"
+    elif _contains_any(req, ["improve ", "update ", "enhance ", "refactor ", "existing project"]):
+        inferred["project_scope"] = "existing_project"
+
+    if _contains_any(req, ["frontend-only", "frontend only", "ui only", "without backend"]):
+        inferred["architecture"] = "frontend_only"
+    elif _contains_any(req, ["fullstack", "full stack"]):
+        inferred["architecture"] = "fullstack"
+
+    if _contains_any(req, ["no backend", "without backend", "frontend-only", "frontend only"]):
+        inferred["backend_required"] = "no"
+    elif _contains_any(
+        req,
+        [
+            "backend",
+            "api",
+            "server",
+            "nest",
+            "express",
+            "fastapi",
+            "django",
+            "flask",
+            "ruby",
+        ],
+    ):
+        inferred["backend_required"] = "yes"
+
+    if _contains_any(req, ["no db", "no database", "without database"]):
+        inferred["database_required"] = "no"
+    elif re.search(r"\b(db|database|postgres|mysql|sqlite|mongo|redis)\b", req):
+        inferred["database_required"] = "yes"
+
+    if inferred.get("architecture") == "frontend_only" and "backend_required" not in inferred:
+        inferred["backend_required"] = "no"
+    if inferred.get("backend_required") == "no" and "database_required" not in inferred:
+        inferred["database_required"] = "no"
+    return inferred
+
+
 def _slugify_project_name(name: str) -> str:
     cleaned = "".join(ch.lower() if ch.isalnum() else "-" for ch in name.strip())
     while "--" in cleaned:
@@ -92,7 +145,9 @@ def _ensure_projects_rooted_path(path: Optional[str], project_name: str) -> str:
     return default_path
 
 
-def _normalize_new_project_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_new_project_plan(
+    plan: Dict[str, Any], checklist: Optional[Checklist] = None
+) -> Dict[str, Any]:
     if plan.get("project_mode") != "new_project":
         return plan
 
@@ -112,23 +167,44 @@ def _normalize_new_project_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
         target_files = []
         plan["target_files"] = target_files
 
+    checklist = checklist or {}
     if len(target_files) == 0:
-        target_files.extend(
-            [
+        wants_frontend = checklist.get("architecture") in {"frontend_only", "fullstack"}
+        wants_backend = checklist.get("backend_required") == "yes"
+        wants_database = checklist.get("database_required") == "yes"
+
+        if not wants_frontend and not wants_backend:
+            # Keep sensible MVP default when checklist is incomplete.
+            wants_frontend = True
+            wants_backend = True
+
+        if wants_frontend:
+            target_files.append(
                 {
                     "file_name": "front-end",
                     "expected_path_hint": f"{project_root}/front-end",
                     "modification_type": "create_directory",
                     "details": "Create frontend workspace directory.",
-                },
+                }
+            )
+        if wants_backend:
+            target_files.append(
                 {
                     "file_name": "back-end",
                     "expected_path_hint": f"{project_root}/back-end",
                     "modification_type": "create_directory",
                     "details": "Create backend workspace directory.",
-                },
-            ]
-        )
+                }
+            )
+        if wants_database:
+            target_files.append(
+                {
+                    "file_name": "database",
+                    "expected_path_hint": f"{project_root}/database",
+                    "modification_type": "create_directory",
+                    "details": "Create database workspace directory.",
+                }
+            )
     return plan
 
 
@@ -319,7 +395,8 @@ def create_plan(
                 if q and a:
                     rounds.append({"question": q, "answer": a})
 
-    checklist = _extract_checklist_from_rounds(rounds)
+    checklist = _infer_checklist_from_requirement(requirement, preselected_project_ref)
+    checklist.update(_extract_checklist_from_rounds(rounds))
     for field, question in MANDATORY_CHECKLIST_QUESTIONS:
         if field in checklist and checklist[field] not in {"unknown", "unspecified"}:
             continue
@@ -377,7 +454,8 @@ def create_plan(
                 raise PMServiceError("Clarification answer cannot be empty.")
             context_store.append_round(request_id=request_id, question=question, answer=answer)
             rounds.append({"question": question, "answer": answer})
-            checklist = _extract_checklist_from_rounds(rounds)
+            checklist = _infer_checklist_from_requirement(requirement, preselected_project_ref)
+            checklist.update(_extract_checklist_from_rounds(rounds))
             continue
 
         plan = decision.get("plan")
@@ -397,7 +475,7 @@ def create_plan(
             "backend_required": checklist.get("backend_required", "unspecified"),
             "database_required": checklist.get("database_required", "unspecified"),
         }
-        plan = _normalize_new_project_plan(plan)
+        plan = _normalize_new_project_plan(plan, checklist)
         plan = _normalize_existing_project_plan(plan, preselected_project_ref)
         ok, errors = validate_plan_json(plan, requirement=requirement)
         if not ok:

@@ -72,6 +72,7 @@ class DevExecutorTests(unittest.TestCase):
             self.assertIsNone(pending)
             self.assertTrue(any("[FAIL]" in e for e in errors), msg=str(errors))
             self.assertTrue(any("[RUN]" in x for x in logs), msg=str(logs))
+            self.assertTrue(any("[WHY_THIS_STEP]" in x for x in logs), msg=str(logs))
 
     def test_pending_llm_task_returned_after_deterministic_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -83,7 +84,7 @@ class DevExecutorTests(unittest.TestCase):
                     cwd=".",
                 )
             ]
-            _, _, errors, attempts, pending = execute_dev_tasks(
+            logs, _, errors, attempts, pending = execute_dev_tasks(
                 tasks,
                 scope_root=tmp,
                 max_retries=5,
@@ -95,6 +96,10 @@ class DevExecutorTests(unittest.TestCase):
             self.assertEqual(
                 classify_failure("", "npm error canceled\nOk to proceed? (y)\n", 1),
                 "interactive_prompt",
+            )
+            self.assertTrue(
+                any("[WHY_RETRY]" in x or "[WHY_RETRY_STOPPED]" in x for x in logs),
+                msg=str(logs),
             )
 
     def test_resolves_redundant_projects_prefix_in_cwd(self) -> None:

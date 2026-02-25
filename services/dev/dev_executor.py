@@ -216,6 +216,8 @@ def execute_dev_tasks(
 
         os.makedirs(cwd, exist_ok=True)
         touched_paths.append(cwd)
+        logs.append(f"[TASK] id={task.id} kind={task.kind} cwd={cwd}")
+        logs.append(f"[WHY_THIS_STEP] {task.description}")
         llm_reserved = 1 if reserve_last_for_llm else 0
         deterministic_budget = max(1, max_retries - llm_reserved)
         current_command = task.command
@@ -246,10 +248,17 @@ def execute_dev_tasks(
             rewritten = rewrite_command_deterministic(current_command, category)
             if rewritten == current_command:
                 # No deterministic fix left; exit deterministic loop.
+                logs.append(
+                    f"[WHY_RETRY_STOPPED] {task.id} no deterministic rewrite for category={category}"
+                )
                 break
             logs.append(
                 f"[RETRY] {task.id} attempt {attempt_idx + 1}/{deterministic_budget} "
                 f"category={category} strategy=deterministic_rewrite"
+            )
+            logs.append(
+                f"[WHY_RETRY] category={category} old_command={current_command} "
+                f"new_command={rewritten}"
             )
             current_command = rewritten
 
@@ -267,6 +276,10 @@ def execute_dev_tasks(
                 logs.append(
                     f"[RETRY_EXHAUSTED] {task.id} deterministic budget exhausted; "
                     "eligible for LLM correction."
+                )
+                logs.append(
+                    f"[ATTEMPT_SUMMARY] last_category={last_attempt.get('category')} "
+                    f"elapsed_ms={last_attempt.get('elapsed_ms')}"
                 )
             else:
                 errors.append(last_error)

@@ -20,6 +20,12 @@ class PMHandoffStoreTests(unittest.TestCase):
                 "backend": "NestJS",
                 "language_preferences": ["TypeScript"],
             },
+            "pm_checklist": {
+                "project_scope": "new_project",
+                "architecture": "frontend_only",
+                "backend_required": "no",
+                "database_required": "no",
+            },
             "bootstrap_commands": [
                 {"cwd": "projects/calculator", "command": "echo bootstrap", "purpose": "bootstrap"}
             ],
@@ -54,6 +60,11 @@ class PMHandoffStoreTests(unittest.TestCase):
             latest = context.load_context(request_id=request_id)
             self.assertEqual(latest["dev_handoff"]["request_id"], request_id)
             self.assertEqual(latest["dev_handoff"]["project_root"], "projects/calculator")
+            structure_paths = [
+                str(x.get("path", "")) for x in latest["dev_handoff"].get("structure_plan", [])
+            ]
+            self.assertIn("projects/calculator/front-end", structure_paths)
+            self.assertNotIn("projects/calculator/back-end", structure_paths)
 
             handoff_path = os.path.join(tmp, ".orchestrator", "dev_handoff.json")
             self.assertTrue(os.path.exists(handoff_path))

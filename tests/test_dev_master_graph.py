@@ -54,6 +54,9 @@ class DevMasterGraphTests(unittest.TestCase):
         self.assertIn("[PREPARE]", logs_blob)
         self.assertIn("[PHASE] bootstrap", logs_blob)
         self.assertIn("[PHASE] implementation", logs_blob)
+        self.assertIn("[PHASE] implementation_pass_1", logs_blob)
+        self.assertIn("[PHASE] implementation_pass_2", logs_blob)
+        self.assertIn("[PASS_SUMMARY]", logs_blob)
         self.assertIn("[IMPLEMENTATION]", logs_blob)
         self.assertIn("[FINAL]", logs_blob)
 
