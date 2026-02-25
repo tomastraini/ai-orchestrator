@@ -12,6 +12,7 @@ ALLOWED_TOP_LEVEL_KEYS = {
     "project_mode",
     "project_ref",
     "stack",
+    "pm_checklist",
     "bootstrap_commands",
     "target_files",
     "constraints",
@@ -28,6 +29,12 @@ ALLOWED_TARGET_FILE_KEYS = {
 ALLOWED_PROJECT_REF_KEYS = {"name", "path_hint"}
 ALLOWED_STACK_KEYS = {"frontend", "backend", "language_preferences"}
 ALLOWED_BOOTSTRAP_COMMAND_KEYS = {"cwd", "command", "purpose"}
+ALLOWED_PM_CHECKLIST_KEYS = {
+    "project_scope",
+    "architecture",
+    "backend_required",
+    "database_required",
+}
 
 
 def _is_non_empty_str(x: Any) -> bool:
@@ -166,6 +173,31 @@ def validate_plan_json(plan: Any, requirement: Optional[str] = None) -> Tuple[bo
             )
         )
         errors.extend(_require_typescript_preference(stack, requirement))
+
+    # pm_checklist
+    pm_checklist = plan.get("pm_checklist")
+    if not isinstance(pm_checklist, dict):
+        errors.append("Field 'pm_checklist' must be an object.")
+    else:
+        errors.extend(
+            _validate_no_unknown_keys(pm_checklist, ALLOWED_PM_CHECKLIST_KEYS, "pm_checklist")
+        )
+        project_scope = pm_checklist.get("project_scope")
+        if project_scope not in {"new_project", "existing_project"}:
+            errors.append(
+                "Field 'pm_checklist.project_scope' must be 'new_project' or 'existing_project'."
+            )
+        architecture = pm_checklist.get("architecture")
+        if architecture not in {"frontend_only", "fullstack"}:
+            errors.append(
+                "Field 'pm_checklist.architecture' must be 'frontend_only' or 'fullstack'."
+            )
+        backend_required = pm_checklist.get("backend_required")
+        if backend_required not in {"yes", "no"}:
+            errors.append("Field 'pm_checklist.backend_required' must be 'yes' or 'no'.")
+        database_required = pm_checklist.get("database_required")
+        if database_required not in {"yes", "no"}:
+            errors.append("Field 'pm_checklist.database_required' must be 'yes' or 'no'.")
 
     # bootstrap_commands
     bootstrap_commands = plan.get("bootstrap_commands")

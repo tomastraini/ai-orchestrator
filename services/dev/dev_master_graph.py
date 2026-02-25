@@ -21,7 +21,9 @@ class DevGraphState(TypedDict, total=False):
     project_name: str
     status: str
     current_step: str
-    tasks: List[DevTask]
+    bootstrap_tasks: List[DevTask]
+    implementation_targets: List[Dict[str, str]]
+    validation_tasks: List[DevTask]
     clarifications: List[Dict[str, str]]
     logs: List[str]
     touched_paths: List[str]
@@ -33,6 +35,10 @@ class DevGraphState(TypedDict, total=False):
     max_retries: int
     last_error: str
     attempt_history: List[Dict[str, Any]]
+    bootstrap_status: str
+    implementation_status: str
+    llm_calls_used: int
+    llm_call_budget: int
 
 
 class DevMasterGraph:
@@ -42,15 +48,17 @@ class DevMasterGraph:
         graph.add_node("derive_dev_todos", self._derive_dev_todos)
         graph.add_node("ask_cli_clarifications_if_needed", self._ask_cli_clarifications_if_needed)
         graph.add_node("prepare_execution_steps", self._prepare_execution_steps)
-        graph.add_node("execute_steps_in_sandbox", self._execute_steps_in_sandbox)
+        graph.add_node("execute_bootstrap_phase", self._execute_bootstrap_phase)
+        graph.add_node("execute_implementation_phase", self._execute_implementation_phase)
         graph.add_node("finalize_result", self._finalize_result)
 
         graph.add_edge(START, "ingest_pm_plan")
         graph.add_edge("ingest_pm_plan", "derive_dev_todos")
         graph.add_edge("derive_dev_todos", "ask_cli_clarifications_if_needed")
         graph.add_edge("ask_cli_clarifications_if_needed", "prepare_execution_steps")
-        graph.add_edge("prepare_execution_steps", "execute_steps_in_sandbox")
-        graph.add_edge("execute_steps_in_sandbox", "finalize_result")
+        graph.add_edge("prepare_execution_steps", "execute_bootstrap_phase")
+        graph.add_edge("execute_bootstrap_phase", "execute_implementation_phase")
+        graph.add_edge("execute_implementation_phase", "finalize_result")
         graph.add_edge("finalize_result", END)
         self._compiled_graph = graph.compile()
 
@@ -63,6 +71,7 @@ class DevMasterGraph:
         ask_user: DevAskFn | None = None,
         handoff: Dict[str, Any] | None = None,
         llm_corrector: LLMCorrectorFn | None = None,
+        max_model_calls_per_run: int = 1,
     ) -> Dict[str, Any]:
         initial_state: DevGraphState = {
             "request_id": request_id,
@@ -71,7 +80,9 @@ class DevMasterGraph:
             "scope_root": scope_root,
             "status": "running",
             "current_step": "init",
-            "tasks": [],
+            "bootstrap_tasks": [],
+            "implementation_targets": [],
+            "validation_tasks": [],
             "clarifications": [],
             "logs": [],
             "touched_paths": [],
@@ -82,6 +93,10 @@ class DevMasterGraph:
             "max_retries": 5,
             "last_error": "",
             "attempt_history": [],
+            "bootstrap_status": "pending",
+            "implementation_status": "pending",
+            "llm_calls_used": 0,
+            "llm_call_budget": max(0, int(max_model_calls_per_run)),
         }
         result = self._compiled_graph.invoke(initial_state)
         result.pop("ask_user", None)
@@ -105,13 +120,15 @@ class DevMasterGraph:
         state["current_step"] = "derive_dev_todos"
         plan = state["plan"]
         handoff = state.get("handoff") or {}
-        tasks: List[DevTask] = []
+        bootstrap_tasks: List[DevTask] = []
+        validation_tasks: List[DevTask] = []
+        implementation_targets: List[Dict[str, str]] = []
 
         handoff_steps = handoff.get("execution_steps")
         if isinstance(handoff_steps, list) and len(handoff_steps) > 0:
             for i, cmd in enumerate(handoff_steps, start=1):
                 if isinstance(cmd, dict):
-                    tasks.append(
+                    bootstrap_tasks.append(
                         DevTask(
                             id=f"handoff_{i}",
                             description=str(cmd.get("purpose", "handoff step")),
@@ -123,7 +140,7 @@ class DevMasterGraph:
         else:
             for i, cmd in enumerate(plan.get("bootstrap_commands", []), start=1):
                 if isinstance(cmd, dict):
-                    tasks.append(
+                    bootstrap_tasks.append(
                         DevTask(
                             id=f"bootstrap_{i}",
                             description=str(cmd.get("purpose", "bootstrap step")),
@@ -135,7 +152,7 @@ class DevMasterGraph:
 
         for i, validation in enumerate(plan.get("validation", []), start=1):
             if isinstance(validation, str):
-                tasks.append(
+                validation_tasks.append(
                     DevTask(
                         id=f"validation_{i}",
                         description=validation,
@@ -145,8 +162,26 @@ class DevMasterGraph:
                     )
                 )
 
-        state["tasks"] = tasks
-        state["logs"].append(f"[TODO] derived_tasks={len(tasks)}")
+        for target in plan.get("target_files", []):
+            if not isinstance(target, dict):
+                continue
+            implementation_targets.append(
+                {
+                    "file_name": str(target.get("file_name", "")),
+                    "expected_path_hint": str(target.get("expected_path_hint", "")),
+                    "modification_type": str(target.get("modification_type", "")),
+                    "details": str(target.get("details", "")),
+                }
+            )
+
+        state["bootstrap_tasks"] = bootstrap_tasks
+        state["validation_tasks"] = validation_tasks
+        state["implementation_targets"] = implementation_targets
+        state["logs"].append(
+            "[TODO] bootstrap_tasks="
+            f"{len(bootstrap_tasks)} implementation_targets={len(implementation_targets)} "
+            f"validation_tasks={len(validation_tasks)}"
+        )
         return state
 
     @staticmethod
@@ -207,10 +242,11 @@ class DevMasterGraph:
         return state
 
     @staticmethod
-    def _execute_steps_in_sandbox(state: DevGraphState) -> DevGraphState:
-        state["current_step"] = "execute_steps_in_sandbox"
+    def _execute_bootstrap_phase(state: DevGraphState) -> DevGraphState:
+        state["current_step"] = "execute_bootstrap_phase"
+        state["logs"].append("[PHASE] bootstrap")
         logs, touched_paths, errors, attempt_history, pending_llm_task = execute_dev_tasks(
-            state.get("tasks", []),
+            state.get("bootstrap_tasks", []),
             scope_root=state["scope_root"],
             max_retries=int(state.get("max_retries", 5)),
             reserve_last_for_llm=True,
@@ -221,11 +257,13 @@ class DevMasterGraph:
         state["retry_count"] = len(state.get("attempt_history", []))
         if errors:
             state["errors"].extend(errors)
-            state["status"] = "failed"
+            state["status"] = "bootstrap_failed"
+            state["bootstrap_status"] = "failed"
             state["last_error"] = errors[-1]
             return state
 
         if pending_llm_task is None:
+            state["bootstrap_status"] = "completed"
             return state
 
         llm_corrector = state.get("llm_corrector")
@@ -233,7 +271,20 @@ class DevMasterGraph:
             state["errors"].append(
                 f"{pending_llm_task['last_error']} (No LLM corrector available after deterministic retries.)"
             )
-            state["status"] = "failed"
+            state["status"] = "bootstrap_failed"
+            state["bootstrap_status"] = "failed"
+            state["last_error"] = state["errors"][-1]
+            return state
+
+        if int(state.get("llm_calls_used", 0)) >= int(state.get("llm_call_budget", 0)):
+            state["logs"].append(
+                f"[LLM_BUDGET] reached ({state.get('llm_call_budget', 0)}); skipping correction."
+            )
+            state["errors"].append(
+                f"{pending_llm_task['last_error']} (LLM model-call budget reached.)"
+            )
+            state["status"] = "bootstrap_failed"
+            state["bootstrap_status"] = "failed"
             state["last_error"] = state["errors"][-1]
             return state
 
@@ -248,6 +299,7 @@ class DevMasterGraph:
             "push_constraint": "git push is blocked.",
         }
         try:
+            state["llm_calls_used"] = int(state.get("llm_calls_used", 0)) + 1
             corrected_command = llm_corrector(correction_input).strip()
         except Exception as e:
             corrected_command = ""
@@ -257,7 +309,8 @@ class DevMasterGraph:
             state["errors"].append(
                 f"{pending_llm_task['last_error']} (LLM did not provide corrected command.)"
             )
-            state["status"] = "failed"
+            state["status"] = "bootstrap_failed"
+            state["bootstrap_status"] = "failed"
             state["last_error"] = state["errors"][-1]
             return state
 
@@ -276,14 +329,82 @@ class DevMasterGraph:
         state["retry_count"] = len(state.get("attempt_history", []))
         if recover_error:
             state["errors"].append(recover_error)
-            state["status"] = "failed"
+            state["status"] = "bootstrap_failed"
+            state["bootstrap_status"] = "failed"
             state["last_error"] = recover_error
+            return state
+        state["bootstrap_status"] = "completed"
+        return state
+
+    @staticmethod
+    def _resolve_implementation_path(scope_root: str, expected_path_hint: str) -> str:
+        path = (expected_path_hint or "").replace("\\", "/").strip().lstrip("./")
+        while path.startswith("projects/"):
+            path = path.split("/", 1)[1] if "/" in path else ""
+        safe_path = os.path.abspath(os.path.join(scope_root, path))
+        scope_abs = os.path.abspath(scope_root)
+        if os.path.commonpath([scope_abs, safe_path]) != scope_abs:
+            raise RuntimeError(f"Implementation target escapes scope: {expected_path_hint}")
+        return safe_path
+
+    @staticmethod
+    def _execute_implementation_phase(state: DevGraphState) -> DevGraphState:
+        state["current_step"] = "execute_implementation_phase"
+        state["logs"].append("[PHASE] implementation")
+
+        if state.get("bootstrap_status") == "failed":
+            state["implementation_status"] = "impl_skipped"
+            state["logs"].append("[IMPLEMENTATION] skipped due to bootstrap_failed")
+            return state
+
+        scope_root = state["scope_root"]
+        targets = state.get("implementation_targets", [])
+        try:
+            for target in targets:
+                expected = str(target.get("expected_path_hint", ""))
+                modification_type = str(target.get("modification_type", "")).lower()
+                details = str(target.get("details", "")).strip()
+                safe_target = DevMasterGraph._resolve_implementation_path(scope_root, expected)
+
+                if modification_type in {"create_directory", "mkdir", "create_dir"}:
+                    os.makedirs(safe_target, exist_ok=True)
+                    state["touched_paths"].append(safe_target)
+                    state["logs"].append(f"[IMPLEMENTATION] ensured directory {safe_target}")
+                    continue
+
+                if os.path.splitext(safe_target)[1] == "":
+                    os.makedirs(safe_target, exist_ok=True)
+                    state["touched_paths"].append(safe_target)
+                    state["logs"].append(f"[IMPLEMENTATION] ensured path {safe_target}")
+                    continue
+
+                os.makedirs(os.path.dirname(safe_target), exist_ok=True)
+                if not os.path.exists(safe_target):
+                    with open(safe_target, "w", encoding="utf-8") as fh:
+                        fh.write(f"# TODO: {details or 'implementation placeholder'}\n")
+                    state["logs"].append(f"[IMPLEMENTATION] created file {safe_target}")
+                else:
+                    with open(safe_target, "a", encoding="utf-8") as fh:
+                        fh.write(f"\n# TODO: {details or 'implementation refinement'}\n")
+                    state["logs"].append(f"[IMPLEMENTATION] updated file {safe_target}")
+                state["touched_paths"].append(safe_target)
+        except Exception as e:
+            state["errors"].append(f"[IMPLEMENTATION_ERROR] {e}")
+            state["implementation_status"] = "failed"
+            state["status"] = "implementation_failed"
+            return state
+
+        state["implementation_status"] = "completed"
         return state
 
     @staticmethod
     def _finalize_result(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "finalize_result"
-        if state.get("status") != "failed":
+        if state.get("status") in {"bootstrap_failed", "implementation_failed"}:
+            pass
+        elif state.get("implementation_status") == "impl_skipped":
+            state["status"] = "bootstrap_failed"
+        else:
             state["status"] = "completed"
         err_count = len(state.get("errors", []))
         state["final_summary"] = (

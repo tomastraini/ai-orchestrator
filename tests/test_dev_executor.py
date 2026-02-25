@@ -97,6 +97,20 @@ class DevExecutorTests(unittest.TestCase):
                 "interactive_prompt",
             )
 
+    def test_resolves_redundant_projects_prefix_in_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tasks = [
+                DevTask(
+                    id="t5",
+                    description="redundant projects prefix",
+                    command="python -c \"print('ok')\"",
+                    cwd="projects/calculator/projects/calculator",
+                )
+            ]
+            _, touched, errors, _, _ = execute_dev_tasks(tasks, scope_root=tmp)
+            self.assertEqual(errors, [], msg=str(errors))
+            self.assertTrue(any("calculator" in path for path in touched), msg=str(touched))
+
 
 if __name__ == "__main__":
     unittest.main()

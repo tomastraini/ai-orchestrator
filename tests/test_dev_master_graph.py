@@ -27,9 +27,9 @@ class DevMasterGraphTests(unittest.TestCase):
             "target_files": [
                 {
                     "file_name": "README.md",
-                    "expected_path_hint": "projects/calc",
-                    "modification_type": "create",
-                    "details": "note",
+                    "expected_path_hint": "projects/calc/README.md",
+                    "modification_type": "create_file",
+                    "details": "calculator implementation note",
                 }
             ],
             "constraints": ["Do not push"],
@@ -52,6 +52,9 @@ class DevMasterGraphTests(unittest.TestCase):
         self.assertIn("[INGEST]", logs_blob)
         self.assertIn("[TODO]", logs_blob)
         self.assertIn("[PREPARE]", logs_blob)
+        self.assertIn("[PHASE] bootstrap", logs_blob)
+        self.assertIn("[PHASE] implementation", logs_blob)
+        self.assertIn("[IMPLEMENTATION]", logs_blob)
         self.assertIn("[FINAL]", logs_blob)
 
     def test_existing_project_without_path_prompts_clarification(self) -> None:
@@ -104,6 +107,30 @@ class DevMasterGraphTests(unittest.TestCase):
         self.assertGreaterEqual(state.get("retry_count", 0), 1)
         self.assertGreaterEqual(len(state.get("attempt_history", [])), 1)
         self.assertIn("[LLM_REWRITE]", "\n".join(state.get("logs", [])))
+
+    def test_bootstrap_failed_marks_impl_skipped(self) -> None:
+        plan = self._sample_plan()
+        plan["bootstrap_commands"] = [
+            {
+                "cwd": ".",
+                "command": "python -c \"import sys; sys.exit(1)\"",
+                "purpose": "irrecoverable failure",
+            }
+        ]
+
+        graph = DevMasterGraph()
+        with tempfile.TemporaryDirectory() as tmp:
+            state = graph.run(
+                request_id="req-linear-4",
+                plan=plan,
+                scope_root=tmp,
+                ask_user=lambda _: "n/a",
+                handoff=None,
+                llm_corrector=lambda _: "",
+                max_model_calls_per_run=0,
+            )
+        self.assertEqual(state["status"], "bootstrap_failed")
+        self.assertEqual(state.get("implementation_status"), "impl_skipped")
 
 
 if __name__ == "__main__":

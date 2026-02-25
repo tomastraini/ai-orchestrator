@@ -31,8 +31,10 @@ def _resolve_cwd(scope_root: str, raw_cwd: str) -> str:
     if not raw or raw == "." or raw == "projects":
         return _assert_within_scope(scope_root, scope_root)
 
-    if raw.startswith("projects/") or raw.startswith("projects\\"):
-        raw = raw.split("/", 1)[1] if "/" in raw else raw.split("\\", 1)[1]
+    raw_norm = raw.replace("\\", "/")
+    while raw_norm.startswith("projects/"):
+        raw_norm = raw_norm.split("/", 1)[1] if "/" in raw_norm else ""
+    raw = raw_norm or "."
 
     if os.path.isabs(raw):
         return _assert_within_scope(scope_root, raw)
@@ -64,10 +66,17 @@ def rewrite_command_deterministic(command: str, category: str) -> str:
     low = cmd.lower()
 
     # Always strip brittle chained cwd changes; cwd is handled by executor.
-    if "&& cd " in low:
+    if "&&" in low:
         segments = [seg.strip() for seg in cmd.split("&&") if seg.strip()]
-        segments = [seg for seg in segments if not seg.lower().startswith("cd ")]
-        cmd = " && ".join(segments) if segments else cmd
+        filtered: List[str] = []
+        for seg in segments:
+            seg_low = seg.lower()
+            if seg_low.startswith("cd "):
+                continue
+            if seg_low.startswith("mkdir ") or seg_low.startswith("mkdir -p "):
+                continue
+            filtered.append(seg)
+        cmd = filtered[0] if filtered else ""
         low = cmd.lower()
 
     # Normalize known bootstrap generators to non-interactive npm defaults.

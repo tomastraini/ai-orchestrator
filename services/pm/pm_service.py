@@ -16,6 +16,62 @@ class PMServiceError(RuntimeError):
 
 
 RoundAnswerFn = Callable[[str, int, int], str]
+Checklist = Dict[str, str]
+
+MANDATORY_CHECKLIST_QUESTIONS: List[tuple[str, str]] = [
+    ("project_scope", "Is this for a new project or an existing project? (new/existing)"),
+    ("architecture", "Should this be frontend-only or fullstack? (frontend/fullstack)"),
+    ("backend_required", "Is a backend required? (yes/no)"),
+    ("database_required", "Is a database required? (yes/no)"),
+]
+
+
+def _normalize_checklist_answer(field: str, answer: str) -> str:
+    value = (answer or "").strip().lower()
+    if field == "project_scope":
+        if "existing" in value:
+            return "existing_project"
+        if "new" in value or "create" in value:
+            return "new_project"
+        return "unknown"
+    if field == "architecture":
+        if "full" in value:
+            return "fullstack"
+        if "front" in value:
+            return "frontend_only"
+        return "unspecified"
+    if field in {"backend_required", "database_required"}:
+        if value in {"yes", "y", "true", "required"}:
+            return "yes"
+        if value in {"no", "n", "false", "not required"}:
+            return "no"
+        return "unspecified"
+    return "unspecified"
+
+
+def _extract_checklist_from_rounds(rounds: List[Dict[str, str]]) -> Checklist:
+    collected: Checklist = {}
+    by_question = {
+        question.lower(): field for field, question in MANDATORY_CHECKLIST_QUESTIONS
+    }
+    for round_entry in rounds:
+        q = str(round_entry.get("question", "")).strip().lower()
+        a = str(round_entry.get("answer", "")).strip()
+        if not q or not a:
+            continue
+        field = by_question.get(q)
+        if not field:
+            continue
+        collected[field] = _normalize_checklist_answer(field, a)
+    return collected
+
+
+def _missing_checklist_fields(checklist: Checklist) -> List[str]:
+    missing: List[str] = []
+    for field, _ in MANDATORY_CHECKLIST_QUESTIONS:
+        if checklist.get(field) in {None, "", "unknown", "unspecified"}:
+            missing.append(field)
+    return missing
 
 
 def _slugify_project_name(name: str) -> str:
@@ -76,6 +132,26 @@ def _normalize_new_project_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     return plan
 
 
+def _normalize_existing_project_plan(
+    plan: Dict[str, Any], forced_project_ref: Optional[Dict[str, str]]
+) -> Dict[str, Any]:
+    if not forced_project_ref:
+        return plan
+    if plan.get("project_mode") != "existing_project":
+        return plan
+    project_ref = plan.get("project_ref")
+    if not isinstance(project_ref, dict):
+        project_ref = {}
+        plan["project_ref"] = project_ref
+    forced_name = str(forced_project_ref.get("name", "")).strip()
+    forced_path = str(forced_project_ref.get("path_hint", "")).strip()
+    if forced_name:
+        project_ref["name"] = forced_name
+    if forced_path:
+        project_ref["path_hint"] = forced_path
+    return plan
+
+
 def _extract_output_text(response: Any) -> str:
     content = None
     for item in response.output:
@@ -111,29 +187,19 @@ def _make_decision_prompt(repo_name: str, *, force_final: bool) -> str:
         else "Use status='needs_clarification' only when project reference/stack is genuinely ambiguous."
     )
     return f"""
-You are a senior technical product manager.
-Repository: {repo_name}
+You are a senior technical product manager for repository: {repo_name}.
+Return strict JSON only.
 
-Your job:
-1) Decide whether requirement references an existing project or a new project.
-2) If ambiguous, ask exactly one focused clarification question.
-3) If clear enough, produce a strict execution plan JSON.
+Policies:
+- Default stack: React + NestJS, TypeScript preference.
+- New projects must be rooted at projects/<name>.
+- Prefer deterministic non-interactive bootstrap commands.
+- Respect mandatory checklist and any preselected project_ref from user-confirmed routing.
 
-Defaults and policies:
-- If stack is unspecified, default to React + NestJS with TypeScript preference.
-- Prefer TypeScript unless requirement explicitly says otherwise.
-- For new projects, everything must be created under projects/<project_name>/.
-- Suggested structure for new projects: front-end/, back-end/, optional database/.
-- For new React app creation, prefer: npx create-react-app <name> --template typescript
-- For new NestJS app creation, prefer: nest new <name> (fallback: npx @nestjs/cli new <name>)
-- Include command cwd values and concise purpose.
-- Never output markdown.
-- Never output explanatory prose.
-
-Output JSON wrapper schema (exact keys only):
+Wrapper format:
 {{
   "status": "needs_clarification" | "final_plan",
-  "question": "non-empty string when status=needs_clarification, else empty string",
+  "question": "string",
   "hypothesis": {{
     "project_mode": "new_project" | "existing_project",
     "project_ref_name": "string",
@@ -144,30 +210,16 @@ Output JSON wrapper schema (exact keys only):
   "plan": {{
     "summary": "string",
     "project_mode": "new_project" | "existing_project",
-    "project_ref": {{
-      "name": "string",
-      "path_hint": "string or null"
+    "project_ref": {{"name": "string", "path_hint": "string or null"}},
+    "stack": {{"frontend": "string", "backend": "string or null", "language_preferences": ["TypeScript"]}},
+    "pm_checklist": {{
+      "project_scope": "new_project|existing_project",
+      "architecture": "frontend_only|fullstack",
+      "backend_required": "yes|no",
+      "database_required": "yes|no"
     }},
-    "stack": {{
-      "frontend": "string",
-      "backend": "string or null",
-      "language_preferences": ["TypeScript"]
-    }},
-    "bootstrap_commands": [
-      {{
-        "cwd": "string",
-        "command": "string",
-        "purpose": "string"
-      }}
-    ],
-    "target_files": [
-      {{
-        "file_name": "string",
-        "expected_path_hint": "string",
-        "modification_type": "string",
-        "details": "string"
-      }}
-    ],
+    "bootstrap_commands": [{{"cwd": "string", "command": "string", "purpose": "string"}}],
+    "target_files": [{{"file_name": "string", "expected_path_hint": "string", "modification_type": "string", "details": "string"}}],
     "constraints": ["string"],
     "validation": ["string"],
     "clarification_summary": ["string"]
@@ -176,9 +228,9 @@ Output JSON wrapper schema (exact keys only):
 
 Rules:
 - {force_line}
-- If status=needs_clarification, set plan to null.
-- If status=final_plan, question must be empty string and plan must be complete.
-- No extra keys anywhere.
+- If status=needs_clarification => plan must be null.
+- If status=final_plan => question must be empty.
+- No extra keys.
 """
 
 
@@ -186,13 +238,24 @@ def _request_model_decision(
     requirement: str,
     rounds: List[Dict[str, str]],
     repo_name: str,
+    checklist: Checklist,
+    forced_project_ref: Optional[Dict[str, str]],
     *,
     force_final: bool,
 ) -> Dict[str, Any]:
     system_prompt = _make_decision_prompt(repo_name, force_final=force_final)
+    recent_rounds = rounds[-2:] if len(rounds) > 2 else rounds
+    summary_rounds = [
+        f"Q: {str(entry.get('question', '')).strip()} | A: {str(entry.get('answer', '')).strip()}"
+        for entry in rounds[-6:]
+    ]
     user_payload = {
         "requirement": requirement,
-        "clarification_rounds": rounds,
+        "clarification_rounds_recent": recent_rounds,
+        "clarification_rounds_summary": summary_rounds,
+        "clarification_round_count": len(rounds),
+        "mandatory_checklist": checklist,
+        "preselected_project_ref": forced_project_ref or None,
         "max_clarification_rounds": 3,
         "force_final": force_final,
     }
@@ -229,6 +292,8 @@ def create_plan(
     context_store: Optional[PMContextStore] = None,
     ask_user: Optional[RoundAnswerFn] = None,
     max_rounds: int = 3,
+    preselected_project_ref: Optional[Dict[str, str]] = None,
+    max_model_calls_per_run: int = 4,
 ) -> PlanJSON:
     """
     PM brain with clarification loop (max_rounds) and strict plan output validation.
@@ -254,14 +319,45 @@ def create_plan(
                 if q and a:
                     rounds.append({"question": q, "answer": a})
 
+    checklist = _extract_checklist_from_rounds(rounds)
+    for field, question in MANDATORY_CHECKLIST_QUESTIONS:
+        if field in checklist and checklist[field] not in {"unknown", "unspecified"}:
+            continue
+        if ask_user is None:
+            raise PMServiceError(
+                "PM mandatory checklist requires ask_user callback for stack-critical questions."
+            )
+        answer = ask_user(question, 0, max_rounds).strip()
+        if not answer:
+            raise PMServiceError("Mandatory checklist answer cannot be empty.")
+        context_store.append_round(request_id=request_id, question=question, answer=answer)
+        rounds.append({"question": question, "answer": answer})
+        checklist[field] = _normalize_checklist_answer(field, answer)
+
+    missing = _missing_checklist_fields(checklist)
+    if missing:
+        raise PMServiceError(
+            f"PM mandatory checklist incomplete for fields: {', '.join(missing)}."
+        )
+
+    model_calls = 0
+
     for round_index in range(max_rounds + 1):
+        if model_calls >= max_model_calls_per_run:
+            raise PMServiceError(
+                f"PM model-call budget reached ({max_model_calls_per_run}). "
+                "Provide more explicit requirement details and retry."
+            )
         force_final = round_index >= max_rounds
         decision = _request_model_decision(
             requirement=requirement,
             rounds=rounds,
             repo_name=repo_name,
+            checklist=checklist,
+            forced_project_ref=preselected_project_ref,
             force_final=force_final,
         )
+        model_calls += 1
 
         status = decision.get("status")
         hypothesis = decision.get("hypothesis")
@@ -281,6 +377,7 @@ def create_plan(
                 raise PMServiceError("Clarification answer cannot be empty.")
             context_store.append_round(request_id=request_id, question=question, answer=answer)
             rounds.append({"question": question, "answer": answer})
+            checklist = _extract_checklist_from_rounds(rounds)
             continue
 
         plan = decision.get("plan")
@@ -294,7 +391,14 @@ def create_plan(
                 f"Q: {entry['question']} | A: {entry['answer']}" for entry in rounds
             ]
 
+        plan["pm_checklist"] = {
+            "project_scope": checklist.get("project_scope", "unknown"),
+            "architecture": checklist.get("architecture", "unspecified"),
+            "backend_required": checklist.get("backend_required", "unspecified"),
+            "database_required": checklist.get("database_required", "unspecified"),
+        }
         plan = _normalize_new_project_plan(plan)
+        plan = _normalize_existing_project_plan(plan, preselected_project_ref)
         ok, errors = validate_plan_json(plan, requirement=requirement)
         if not ok:
             raise PMServiceError(

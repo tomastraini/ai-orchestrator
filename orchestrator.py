@@ -11,6 +11,10 @@ from shared.state import PipelineState
 from services.pm_service import create_plan, PMServiceError
 from services.pm_context_store import PMContextStore
 from services.dev_service import DevService
+from services.pm.project_resolver import (
+    is_vague_existing_project_request,
+    resolve_project_candidates,
+)
 
 
 PROJECTS_ROOT = os.path.join(os.path.dirname(__file__), "projects")
@@ -37,6 +41,16 @@ def _ask_dev_clarification(question: str) -> str:
     return input("Your answer: ").strip()
 
 
+def _confirm_existing_project(candidate: Dict[str, Any]) -> bool:
+    name = str(candidate.get("name", ""))
+    path_hint = str(candidate.get("path_hint", ""))
+    score = candidate.get("score", 0.0)
+    ans = input(
+        f"Potential existing project match: {name} ({path_hint}, score={score}). Use it? (Y/n): "
+    ).strip().lower()
+    return ans in {"", "y", "yes"}
+
+
 def run(requirement: str) -> int:
     request_id = str(uuid.uuid4())
     state = PipelineState(
@@ -48,6 +62,17 @@ def run(requirement: str) -> int:
     repo_root = os.path.dirname(__file__)
     context_store = PMContextStore(repo_root=repo_root)
     print(f"[REQUEST ID] {request_id}")
+    preselected_project_ref: Dict[str, str] | None = None
+
+    if is_vague_existing_project_request(requirement):
+        candidates = resolve_project_candidates(requirement, PROJECTS_ROOT)
+        if candidates:
+            top = candidates[0]
+            if _confirm_existing_project(top):
+                preselected_project_ref = {
+                    "name": str(top.get("name", "")),
+                    "path_hint": str(top.get("path_hint", "")),
+                }
 
     # 1) PM creates plan (reasoning lives only in PM service)
     try:
@@ -58,6 +83,7 @@ def run(requirement: str) -> int:
             context_store=context_store,
             ask_user=_ask_clarification,
             max_rounds=3,
+            preselected_project_ref=preselected_project_ref,
         )
     except PMServiceError as e:
         print(f"[PM ERROR] {e}")

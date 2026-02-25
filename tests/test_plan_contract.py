@@ -19,6 +19,12 @@ def _base_plan_new_project() -> dict:
             "backend": "NestJS",
             "language_preferences": ["TypeScript"],
         },
+        "pm_checklist": {
+            "project_scope": "new_project",
+            "architecture": "fullstack",
+            "backend_required": "yes",
+            "database_required": "no",
+        },
         "bootstrap_commands": [
             {
                 "cwd": "projects",

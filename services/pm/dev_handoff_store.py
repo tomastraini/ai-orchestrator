@@ -10,6 +10,17 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_projects_path(path: str, default_path: str) -> str:
+    raw = (path or "").replace("\\", "/").strip().lstrip("./")
+    if not raw:
+        raw = default_path
+    if not raw.startswith("projects/"):
+        raw = default_path
+    while "/projects/" in raw:
+        raw = raw.replace("/projects/", "/")
+    return raw
+
+
 def _normalize_execution_step(
     *,
     project_root: str,
@@ -20,11 +31,18 @@ def _normalize_execution_step(
     cmd = command.strip()
     low = cmd.lower()
 
-    # Remove brittle chained path navigation from PM output.
-    if "&& cd " in low:
+    # Normalize chained commands to a single executable command.
+    if "&&" in cmd:
         segments = [seg.strip() for seg in cmd.split("&&") if seg.strip()]
-        segments = [seg for seg in segments if not seg.lower().startswith("cd ")]
-        cmd = " && ".join(segments) if segments else cmd
+        filtered: List[str] = []
+        for seg in segments:
+            lowered = seg.lower()
+            if lowered.startswith("cd "):
+                continue
+            if lowered.startswith("mkdir ") or lowered.startswith("mkdir -p "):
+                continue
+            filtered.append(seg)
+        cmd = filtered[0] if filtered else ""
         low = cmd.lower()
 
     normalized_cwd = (cwd or ".").strip()
@@ -32,8 +50,7 @@ def _normalize_execution_step(
         normalized_cwd = project_root
     if normalized_cwd.startswith("./"):
         normalized_cwd = normalized_cwd[2:]
-    if not normalized_cwd.replace("\\", "/").startswith("projects/"):
-        normalized_cwd = project_root
+    normalized_cwd = _normalize_projects_path(normalized_cwd, project_root)
 
     # Force non-interactive scaffold defaults.
     if "create-react-app" in low and "--use-npm" not in low:
@@ -68,6 +85,7 @@ def build_dev_handoff(
         slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in str(project_name))
         slug = "-".join(part for part in slug.split("-") if part) or "project"
         project_root = f"projects/{slug}"
+    project_root = _normalize_projects_path(project_root, project_root)
 
     structure_plan = [
         {"path": f"{project_root}/front-end", "kind": "suggested"},
@@ -101,6 +119,7 @@ def build_dev_handoff(
         "project_root": project_root,
         "structure_plan": structure_plan,
         "execution_steps": execution_steps,
+        "pm_checklist": plan.get("pm_checklist", {}),
         "constraints": [str(x) for x in plan.get("constraints", [])],
         "validation": [str(x) for x in plan.get("validation", [])],
         "clarifications": rounds,

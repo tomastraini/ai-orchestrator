@@ -12,9 +12,10 @@ LLMCorrectorFn = Callable[[Dict[str, Any]], str]
 
 
 class DevService:
-    def __init__(self, scope_root: str):
+    def __init__(self, scope_root: str, max_model_calls_per_run: int = 1):
         self.scope_root = scope_root
         self.graph = DevMasterGraph()
+        self.max_model_calls_per_run = max(0, int(max_model_calls_per_run))
 
     def execute_plan(
         self,
@@ -24,6 +25,7 @@ class DevService:
         ask_user: Optional[DevAskFn] = None,
         handoff: Optional[Dict[str, Any]] = None,
         llm_corrector: Optional[LLMCorrectorFn] = None,
+        max_model_calls_per_run: Optional[int] = None,
     ) -> Dict[str, Optional[str]]:
         """
         Execute PM-authored plan in a linear developer workflow.
@@ -38,6 +40,11 @@ class DevService:
             ask_user=ask_user,
             handoff=handoff,
             llm_corrector=llm_corrector,
+            max_model_calls_per_run=(
+                self.max_model_calls_per_run
+                if max_model_calls_per_run is None
+                else max(0, int(max_model_calls_per_run))
+            ),
         )
 
         logs = final_state.get("logs", [])
@@ -69,12 +76,22 @@ class DevService:
             "No markdown, no explanation. "
             "Constraints: command must run within ./projects scope, no git push."
         )
+        reduced_payload = {
+            "task_id": str(payload.get("task_id", "")),
+            "cwd": str(payload.get("cwd", "")),
+            "command": str(payload.get("command", "")),
+            "error": str(payload.get("error", "")),
+            "last_attempt": payload.get("last_attempt", {}),
+            "scope_constraint": str(payload.get("scope_constraint", "")),
+            "push_constraint": str(payload.get("push_constraint", "")),
+        }
+
         try:
             response = client.responses.create(
                 model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.1-codex-mini"),
                 input=[
                     {"role": "system", "content": prompt},
-                    {"role": "user", "content": str(payload)},
+                    {"role": "user", "content": str(reduced_payload)},
                 ],
             )
             for item in response.output:

@@ -4,7 +4,14 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
 
-DevStatus = Literal["pending", "running", "completed", "failed"]
+DevStatus = Literal[
+    "pending",
+    "running",
+    "completed",
+    "failed",
+    "bootstrap_failed",
+    "implementation_failed",
+]
 
 
 @dataclass
