@@ -116,6 +116,47 @@ class DevExecutorTests(unittest.TestCase):
             self.assertEqual(errors, [], msg=str(errors))
             self.assertTrue(any("calculator" in path for path in touched), msg=str(touched))
 
+    def test_streams_output_to_log_sink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            captured: list[str] = []
+            tasks = [
+                DevTask(
+                    id="t6",
+                    description="stream output",
+                    command="python -c \"print('hello-stream')\"",
+                    cwd=".",
+                )
+            ]
+            logs, _, errors, _, _ = execute_dev_tasks(
+                tasks,
+                scope_root=tmp,
+                log_sink=captured.append,
+                heartbeat_seconds=0.0,
+            )
+            self.assertEqual(errors, [], msg=str(errors))
+            self.assertTrue(any("[STREAM_STDOUT]" in line for line in captured), msg=str(captured))
+            self.assertTrue(any("hello-stream" in line for line in logs), msg=str(logs))
+
+    def test_emits_heartbeat_for_quiet_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            captured: list[str] = []
+            tasks = [
+                DevTask(
+                    id="t7",
+                    description="quiet command",
+                    command="python -c \"import time; time.sleep(0.6); print('done')\"",
+                    cwd=".",
+                )
+            ]
+            _, _, errors, _, _ = execute_dev_tasks(
+                tasks,
+                scope_root=tmp,
+                log_sink=captured.append,
+                heartbeat_seconds=0.1,
+            )
+            self.assertEqual(errors, [], msg=str(errors))
+            self.assertTrue(any("[HEARTBEAT]" in line for line in captured), msg=str(captured))
+
 
 if __name__ == "__main__":
     unittest.main()

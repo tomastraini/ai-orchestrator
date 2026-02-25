@@ -9,6 +9,7 @@ from services.dev.dev_master_graph import DevMasterGraph
 
 DevAskFn = Callable[[str], str]
 LLMCorrectorFn = Callable[[Dict[str, Any]], str]
+LogSinkFn = Callable[[str], None]
 
 
 class DevService:
@@ -26,11 +27,14 @@ class DevService:
         handoff: Optional[Dict[str, Any]] = None,
         llm_corrector: Optional[LLMCorrectorFn] = None,
         max_model_calls_per_run: Optional[int] = None,
+        log_sink: Optional[LogSinkFn] = None,
     ) -> Dict[str, Optional[str]]:
         """
         Execute PM-authored plan in a linear developer workflow.
         """
         os.makedirs(self.scope_root, exist_ok=True)
+        if callable(log_sink):
+            log_sink("[DEV] starting graph run...")
         if llm_corrector is None:
             llm_corrector = self._default_llm_corrector
         final_state = self.graph.run(
@@ -45,6 +49,7 @@ class DevService:
                 if max_model_calls_per_run is None
                 else max(0, int(max_model_calls_per_run))
             ),
+            log_sink=log_sink,
         )
 
         logs = final_state.get("logs", [])

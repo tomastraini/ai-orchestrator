@@ -104,12 +104,19 @@ def run(requirement: str) -> int:
 
     # 3) Dev executes plan (engineering brain)
     print("[PHASE] dev_execution")
+    print("[DEV] execution starting immediately...")
     dev = DevService(scope_root=PROJECTS_ROOT)
+    live_stream_enabled = True
+
+    def _live_log_sink(line: str) -> None:
+        print(line, flush=True)
+
     result = dev.execute_plan(
         state.plan,
         request_id=state.request_id,
         ask_user=_ask_dev_clarification,
         handoff=dev_handoff if isinstance(dev_handoff, dict) else None,
+        log_sink=_live_log_sink if live_stream_enabled else None,
     )
 
     state.branch_name = result.get("branch_name")
@@ -118,9 +125,12 @@ def run(requirement: str) -> int:
 
     print(f"[DEV STATUS] {state.dev_status}")
     if state.build_logs:
-        print("\n===== DEV LOGS =====")
-        print(state.build_logs)
-        print("====================\n")
+        if live_stream_enabled:
+            print("[DEV LOGS] already streamed live.")
+        else:
+            print("\n===== DEV LOGS =====")
+            print(state.build_logs)
+            print("====================\n")
     if state.branch_name:
         print(f"[BRANCH] {state.branch_name}")
 

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from queue import Empty, Queue
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from shared.dev_schemas import DevTask
 
@@ -44,6 +46,16 @@ def _resolve_cwd(scope_root: str, raw_cwd: str) -> str:
 def _is_blocked_command(command: str) -> bool:
     low = command.lower()
     return "git push" in low
+
+
+def _emit(logs: List[str], message: str, log_sink: Optional[Callable[[str], None]]) -> None:
+    logs.append(message)
+    if callable(log_sink):
+        try:
+            log_sink(message)
+        except Exception:
+            # Log streaming should never break execution.
+            pass
 
 
 def classify_failure(stdout: str, stderr: str, exit_code: int) -> str:
@@ -116,42 +128,102 @@ def _run_once(
     cwd: str,
     command: str,
     timeout_seconds: int,
+    log_sink: Optional[Callable[[str], None]] = None,
+    heartbeat_seconds: float = 15.0,
 ) -> Tuple[List[str], Optional[str], Dict[str, Any]]:
     logs: List[str] = []
     started = time.time()
-    logs.append(f"[RUN] {task_id} ({task_kind}) @ {cwd}: {command}")
+    _emit(logs, f"[RUN] {task_id} ({task_kind}) @ {cwd}: {command}", log_sink)
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             command,
             cwd=cwd,
             shell=True,
-            check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_seconds,
+            bufsize=1,
         )
+        line_queue: Queue[Tuple[str, str]] = Queue()
+        stdout_chunks: List[str] = []
+        stderr_chunks: List[str] = []
+
+        def _pump(pipe: Any, stream_name: str) -> None:
+            if pipe is None:
+                return
+            try:
+                for line in iter(pipe.readline, ""):
+                    line_queue.put((stream_name, line.rstrip("\n")))
+            finally:
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
+
+        t_out = threading.Thread(target=_pump, args=(proc.stdout, "stdout"), daemon=True)
+        t_err = threading.Thread(target=_pump, args=(proc.stderr, "stderr"), daemon=True)
+        t_out.start()
+        t_err.start()
+
+        last_activity = time.time()
+        timeout_at = started + float(timeout_seconds)
+        while True:
+            now = time.time()
+            if now >= timeout_at:
+                proc.kill()
+                raise subprocess.TimeoutExpired(command, timeout_seconds)
+
+            consumed = False
+            try:
+                stream_name, line = line_queue.get(timeout=0.2)
+                consumed = True
+                if stream_name == "stdout":
+                    stdout_chunks.append(line)
+                    _emit(logs, f"[STREAM_STDOUT] {task_id} {line}", log_sink)
+                else:
+                    stderr_chunks.append(line)
+                    _emit(logs, f"[STREAM_STDERR] {task_id} {line}", log_sink)
+                last_activity = now
+            except Empty:
+                pass
+
+            if proc.poll() is not None and line_queue.empty():
+                break
+
+            if not consumed and heartbeat_seconds > 0 and (now - last_activity) >= heartbeat_seconds:
+                elapsed = int((now - started) * 1000)
+                _emit(
+                    logs,
+                    f"[HEARTBEAT] {task_id} still running elapsed_ms={elapsed}",
+                    log_sink,
+                )
+                last_activity = now
+
+        t_out.join(timeout=1.0)
+        t_err.join(timeout=1.0)
         elapsed_ms = int((time.time() - started) * 1000)
-        stdout = (proc.stdout or "").strip()
-        stderr = (proc.stderr or "").strip()
+        stdout = "\n".join(chunk for chunk in stdout_chunks if chunk).strip()
+        stderr = "\n".join(chunk for chunk in stderr_chunks if chunk).strip()
         if stdout:
-            logs.append(f"[STDOUT] {task_id}\n{stdout}")
+            _emit(logs, f"[STDOUT] {task_id}\n{stdout}", log_sink)
         if stderr:
-            logs.append(f"[STDERR] {task_id}\n{stderr}")
-        category = classify_failure(stdout, stderr, proc.returncode)
+            _emit(logs, f"[STDERR] {task_id}\n{stderr}", log_sink)
+        exit_code = int(proc.returncode if proc.returncode is not None else 1)
+        category = classify_failure(stdout, stderr, exit_code)
         attempt = {
             "task_id": task_id,
             "command": command,
             "cwd": cwd,
-            "exit_code": proc.returncode,
+            "exit_code": exit_code,
             "category": category,
             "elapsed_ms": elapsed_ms,
             "stdout": stdout,
             "stderr": stderr,
         }
-        if proc.returncode == 0:
-            logs.append(f"[DONE] {task_id} in {elapsed_ms}ms")
+        if exit_code == 0:
+            _emit(logs, f"[DONE] {task_id} in {elapsed_ms}ms", log_sink)
             return logs, None, attempt
-        return logs, f"[FAIL] {task_id}: exited with code {proc.returncode}", attempt
+        return logs, f"[FAIL] {task_id}: exited with code {exit_code}", attempt
     except subprocess.TimeoutExpired:
         elapsed_ms = int((time.time() - started) * 1000)
         attempt = {
@@ -164,7 +236,7 @@ def _run_once(
             "stdout": "",
             "stderr": "Command timed out.",
         }
-        logs.append(f"[TIMEOUT] {task_id} exceeded {timeout_seconds}s")
+        _emit(logs, f"[TIMEOUT] {task_id} exceeded {timeout_seconds}s", log_sink)
         return logs, f"[TIMEOUT] {task_id}: exceeded {timeout_seconds}s", attempt
     except Exception as e:
         elapsed_ms = int((time.time() - started) * 1000)
@@ -178,7 +250,7 @@ def _run_once(
             "stdout": "",
             "stderr": str(e),
         }
-        logs.append(f"[EXCEPTION] {task_id}: {e}")
+        _emit(logs, f"[EXCEPTION] {task_id}: {e}", log_sink)
         return logs, f"[EXCEPTION] {task_id}: {e}", attempt
 
 
@@ -189,6 +261,8 @@ def execute_dev_tasks(
     max_retries: int = 5,
     reserve_last_for_llm: bool = True,
     timeout_seconds: int = 900,
+    log_sink: Optional[Callable[[str], None]] = None,
+    heartbeat_seconds: float = 15.0,
 ) -> Tuple[List[str], List[str], List[str], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
     logs: List[str] = []
     touched_paths: List[str] = []
@@ -201,7 +275,7 @@ def execute_dev_tasks(
 
     for task in tasks:
         if not task.command:
-            logs.append(f"[SKIP] {task.id}: no command for task '{task.description}'")
+            _emit(logs, f"[SKIP] {task.id}: no command for task '{task.description}'", log_sink)
             continue
 
         if _is_blocked_command(task.command):
@@ -216,8 +290,8 @@ def execute_dev_tasks(
 
         os.makedirs(cwd, exist_ok=True)
         touched_paths.append(cwd)
-        logs.append(f"[TASK] id={task.id} kind={task.kind} cwd={cwd}")
-        logs.append(f"[WHY_THIS_STEP] {task.description}")
+        _emit(logs, f"[TASK] id={task.id} kind={task.kind} cwd={cwd}", log_sink)
+        _emit(logs, f"[WHY_THIS_STEP] {task.description}", log_sink)
         llm_reserved = 1 if reserve_last_for_llm else 0
         deterministic_budget = max(1, max_retries - llm_reserved)
         current_command = task.command
@@ -232,6 +306,8 @@ def execute_dev_tasks(
                 cwd=cwd,
                 command=current_command,
                 timeout_seconds=timeout_seconds,
+                log_sink=log_sink,
+                heartbeat_seconds=heartbeat_seconds,
             )
             attempt["attempt"] = attempt_idx
             attempt["strategy"] = strategy
@@ -248,17 +324,24 @@ def execute_dev_tasks(
             rewritten = rewrite_command_deterministic(current_command, category)
             if rewritten == current_command:
                 # No deterministic fix left; exit deterministic loop.
-                logs.append(
+                _emit(
+                    logs,
                     f"[WHY_RETRY_STOPPED] {task.id} no deterministic rewrite for category={category}"
+                    ,
+                    log_sink,
                 )
                 break
-            logs.append(
+            _emit(
+                logs,
                 f"[RETRY] {task.id} attempt {attempt_idx + 1}/{deterministic_budget} "
-                f"category={category} strategy=deterministic_rewrite"
+                f"category={category} strategy=deterministic_rewrite",
+                log_sink,
             )
-            logs.append(
+            _emit(
+                logs,
                 f"[WHY_RETRY] category={category} old_command={current_command} "
-                f"new_command={rewritten}"
+                f"new_command={rewritten}",
+                log_sink,
             )
             current_command = rewritten
 
@@ -273,13 +356,17 @@ def execute_dev_tasks(
                     "last_attempt": last_attempt,
                     "max_retries": max_retries,
                 }
-                logs.append(
+                _emit(
+                    logs,
                     f"[RETRY_EXHAUSTED] {task.id} deterministic budget exhausted; "
-                    "eligible for LLM correction."
+                    "eligible for LLM correction.",
+                    log_sink,
                 )
-                logs.append(
+                _emit(
+                    logs,
                     f"[ATTEMPT_SUMMARY] last_category={last_attempt.get('category')} "
-                    f"elapsed_ms={last_attempt.get('elapsed_ms')}"
+                    f"elapsed_ms={last_attempt.get('elapsed_ms')}",
+                    log_sink,
                 )
             else:
                 errors.append(last_error)
@@ -296,6 +383,8 @@ def execute_single_recovery_command(
     cwd: str,
     command: str,
     timeout_seconds: int = 900,
+    log_sink: Optional[Callable[[str], None]] = None,
+    heartbeat_seconds: float = 15.0,
 ) -> Tuple[List[str], Optional[str], Dict[str, Any]]:
     scope_abs = _normalize_scope_path(scope_root)
     if _is_blocked_command(command):
@@ -320,4 +409,6 @@ def execute_single_recovery_command(
         cwd=safe_cwd,
         command=command,
         timeout_seconds=timeout_seconds,
+        log_sink=log_sink,
+        heartbeat_seconds=heartbeat_seconds,
     )

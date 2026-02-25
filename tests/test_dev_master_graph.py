@@ -135,6 +135,22 @@ class DevMasterGraphTests(unittest.TestCase):
         self.assertEqual(state["status"], "bootstrap_failed")
         self.assertEqual(state.get("implementation_status"), "impl_skipped")
 
+    def test_log_sink_receives_early_phase_events(self) -> None:
+        plan = self._sample_plan()
+        graph = DevMasterGraph()
+        captured: list[str] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            state = graph.run(
+                request_id="req-linear-5",
+                plan=plan,
+                scope_root=tmp,
+                ask_user=lambda _: "n/a",
+                log_sink=captured.append,
+            )
+        self.assertEqual(state["status"], "completed")
+        self.assertTrue(any("[PHASE_START] ingest_pm_plan" in line for line in captured), msg=str(captured))
+        self.assertTrue(any("[PHASE] bootstrap" in line for line in captured), msg=str(captured))
+
 
 if __name__ == "__main__":
     unittest.main()
