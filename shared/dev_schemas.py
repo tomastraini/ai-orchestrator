@@ -36,6 +36,10 @@ class DevExecutionState:
     execution_logs: List[str] = field(default_factory=list)
     touched_paths: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    retry_count: int = 0
+    max_retries: int = 5
+    last_error: Optional[str] = None
+    attempt_history: List[Dict[str, Any]] = field(default_factory=list)
     final_summary: Optional[str] = None
 
 

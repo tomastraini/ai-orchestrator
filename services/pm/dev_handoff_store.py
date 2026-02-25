@@ -10,6 +10,51 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_execution_step(
+    *,
+    project_root: str,
+    command: str,
+    cwd: str,
+    purpose: str,
+) -> Dict[str, str]:
+    cmd = command.strip()
+    low = cmd.lower()
+
+    # Remove brittle chained path navigation from PM output.
+    if "&& cd " in low:
+        segments = [seg.strip() for seg in cmd.split("&&") if seg.strip()]
+        segments = [seg for seg in segments if not seg.lower().startswith("cd ")]
+        cmd = " && ".join(segments) if segments else cmd
+        low = cmd.lower()
+
+    normalized_cwd = (cwd or ".").strip()
+    if normalized_cwd in {"", ".", "./"}:
+        normalized_cwd = project_root
+    if normalized_cwd.startswith("./"):
+        normalized_cwd = normalized_cwd[2:]
+    if not normalized_cwd.replace("\\", "/").startswith("projects/"):
+        normalized_cwd = project_root
+
+    # Force non-interactive scaffold defaults.
+    if "create-react-app" in low and "--use-npm" not in low:
+        cmd = f"{cmd} --use-npm"
+    if "nest new" in low and "@nestjs/cli" not in low:
+        parts = cmd.split()
+        app_name = parts[2] if len(parts) >= 3 else "back-end"
+        cmd = f"npx @nestjs/cli new {app_name} --package-manager npm --skip-git"
+    if "@nestjs/cli new" in low:
+        if "--package-manager" not in cmd.lower():
+            cmd = f"{cmd} --package-manager npm"
+        if "--skip-git" not in cmd.lower():
+            cmd = f"{cmd} --skip-git"
+
+    return {
+        "cwd": normalized_cwd,
+        "command": cmd,
+        "purpose": purpose,
+    }
+
+
 def build_dev_handoff(
     *,
     request_id: str,
@@ -43,11 +88,12 @@ def build_dev_handoff(
     for cmd in plan.get("bootstrap_commands", []):
         if isinstance(cmd, dict):
             execution_steps.append(
-                {
-                    "cwd": str(cmd.get("cwd", ".")),
-                    "command": str(cmd.get("command", "")),
-                    "purpose": str(cmd.get("purpose", "bootstrap")),
-                }
+                _normalize_execution_step(
+                    project_root=project_root,
+                    cwd=str(cmd.get("cwd", ".")),
+                    command=str(cmd.get("command", "")),
+                    purpose=str(cmd.get("purpose", "bootstrap")),
+                )
             )
 
     return {

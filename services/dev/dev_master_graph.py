@@ -5,11 +5,12 @@ from typing import Any, Callable, Dict, List, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from services.dev.dev_executor import execute_dev_tasks
+from services.dev.dev_executor import execute_dev_tasks, execute_single_recovery_command
 from shared.dev_schemas import DevTask, derive_project_name
 
 
 DevAskFn = Callable[[str], str]
+LLMCorrectorFn = Callable[[Dict[str, Any]], str]
 
 
 class DevGraphState(TypedDict, total=False):
@@ -27,6 +28,11 @@ class DevGraphState(TypedDict, total=False):
     errors: List[str]
     final_summary: str
     ask_user: Any
+    llm_corrector: Any
+    retry_count: int
+    max_retries: int
+    last_error: str
+    attempt_history: List[Dict[str, Any]]
 
 
 class DevMasterGraph:
@@ -56,6 +62,7 @@ class DevMasterGraph:
         scope_root: str,
         ask_user: DevAskFn | None = None,
         handoff: Dict[str, Any] | None = None,
+        llm_corrector: LLMCorrectorFn | None = None,
     ) -> Dict[str, Any]:
         initial_state: DevGraphState = {
             "request_id": request_id,
@@ -70,9 +77,15 @@ class DevMasterGraph:
             "touched_paths": [],
             "errors": [],
             "ask_user": ask_user,
+            "llm_corrector": llm_corrector,
+            "retry_count": 0,
+            "max_retries": 5,
+            "last_error": "",
+            "attempt_history": [],
         }
         result = self._compiled_graph.invoke(initial_state)
         result.pop("ask_user", None)
+        result.pop("llm_corrector", None)
         return result
 
     @staticmethod
@@ -171,20 +184,100 @@ class DevMasterGraph:
         os.makedirs(project_dir, exist_ok=True)
         state["touched_paths"].append(project_dir)
         state["logs"].append(f"[PREPARE] ensured project dir {project_dir}")
+
+        # Ensure suggested folder layout exists before bootstrap commands run.
+        handoff = state.get("handoff") or {}
+        structure_plan = handoff.get("structure_plan")
+        if isinstance(structure_plan, list):
+            for entry in structure_plan:
+                if not isinstance(entry, dict):
+                    continue
+                raw_path = str(entry.get("path", "")).strip()
+                if not raw_path:
+                    continue
+                normalized = raw_path.replace("\\", "/")
+                if normalized.startswith("projects/"):
+                    rel = normalized.split("/", 1)[1]
+                    target_dir = os.path.join(state["scope_root"], rel)
+                else:
+                    target_dir = os.path.join(state["scope_root"], normalized)
+                os.makedirs(target_dir, exist_ok=True)
+                state["touched_paths"].append(target_dir)
+                state["logs"].append(f"[PREPARE] ensured structure dir {target_dir}")
         return state
 
     @staticmethod
     def _execute_steps_in_sandbox(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "execute_steps_in_sandbox"
-        logs, touched_paths, errors = execute_dev_tasks(
+        logs, touched_paths, errors, attempt_history, pending_llm_task = execute_dev_tasks(
             state.get("tasks", []),
             scope_root=state["scope_root"],
+            max_retries=int(state.get("max_retries", 5)),
+            reserve_last_for_llm=True,
         )
         state["logs"].extend(logs)
         state["touched_paths"].extend(touched_paths)
+        state["attempt_history"].extend(attempt_history)
+        state["retry_count"] = len(state.get("attempt_history", []))
         if errors:
             state["errors"].extend(errors)
             state["status"] = "failed"
+            state["last_error"] = errors[-1]
+            return state
+
+        if pending_llm_task is None:
+            return state
+
+        llm_corrector = state.get("llm_corrector")
+        if not callable(llm_corrector):
+            state["errors"].append(
+                f"{pending_llm_task['last_error']} (No LLM corrector available after deterministic retries.)"
+            )
+            state["status"] = "failed"
+            state["last_error"] = state["errors"][-1]
+            return state
+
+        correction_input = {
+            "task_id": pending_llm_task["task_id"],
+            "task_kind": pending_llm_task["task_kind"],
+            "cwd": pending_llm_task["cwd"],
+            "command": pending_llm_task["last_command"],
+            "error": pending_llm_task["last_error"],
+            "last_attempt": pending_llm_task["last_attempt"],
+            "scope_constraint": "All commands must remain within ./projects scope.",
+            "push_constraint": "git push is blocked.",
+        }
+        try:
+            corrected_command = llm_corrector(correction_input).strip()
+        except Exception as e:
+            corrected_command = ""
+            state["logs"].append(f"[LLM_REWRITE_ERROR] {pending_llm_task['task_id']}: {e}")
+
+        if not corrected_command:
+            state["errors"].append(
+                f"{pending_llm_task['last_error']} (LLM did not provide corrected command.)"
+            )
+            state["status"] = "failed"
+            state["last_error"] = state["errors"][-1]
+            return state
+
+        state["logs"].append(f"[LLM_REWRITE] {pending_llm_task['task_id']} -> {corrected_command}")
+        recover_logs, recover_error, recover_attempt = execute_single_recovery_command(
+            task_id=str(pending_llm_task["task_id"]),
+            task_kind=str(pending_llm_task["task_kind"]),
+            scope_root=state["scope_root"],
+            cwd=str(pending_llm_task["cwd"]),
+            command=corrected_command,
+        )
+        recover_attempt["attempt"] = int(state.get("max_retries", 5))
+        recover_attempt["strategy"] = "llm_rewrite"
+        state["logs"].extend(recover_logs)
+        state["attempt_history"].append(recover_attempt)
+        state["retry_count"] = len(state.get("attempt_history", []))
+        if recover_error:
+            state["errors"].append(recover_error)
+            state["status"] = "failed"
+            state["last_error"] = recover_error
         return state
 
     @staticmethod

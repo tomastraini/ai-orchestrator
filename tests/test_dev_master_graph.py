@@ -77,6 +77,34 @@ class DevMasterGraphTests(unittest.TestCase):
         self.assertGreaterEqual(len(asked), 1)
         self.assertGreaterEqual(len(state.get("clarifications", [])), 1)
 
+    def test_llm_fallback_recovers_after_deterministic_exhaustion(self) -> None:
+        plan = self._sample_plan()
+        plan["bootstrap_commands"] = [
+            {
+                "cwd": ".",
+                "command": "python -c \"import sys; sys.stderr.write('npm error canceled\\n'); sys.exit(1)\"",
+                "purpose": "simulate interactive failure",
+            }
+        ]
+
+        def llm_corrector(_: dict) -> str:
+            return "python -c \"print('recovered')\""
+
+        graph = DevMasterGraph()
+        with tempfile.TemporaryDirectory() as tmp:
+            state = graph.run(
+                request_id="req-linear-3",
+                plan=plan,
+                scope_root=tmp,
+                ask_user=lambda _: "n/a",
+                handoff=None,
+                llm_corrector=llm_corrector,
+            )
+        self.assertEqual(state["status"], "completed", msg=str(state.get("errors", [])))
+        self.assertGreaterEqual(state.get("retry_count", 0), 1)
+        self.assertGreaterEqual(len(state.get("attempt_history", [])), 1)
+        self.assertIn("[LLM_REWRITE]", "\n".join(state.get("logs", [])))
+
 
 if __name__ == "__main__":
     unittest.main()
