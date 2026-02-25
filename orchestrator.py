@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from typing import Any, Dict
 
 from shared.state import PipelineState
 from services.pm_service import create_plan, PMServiceError
+from services.pm_context_store import PMContextStore
 from services.dev_service import DevService
 
 
@@ -25,12 +27,33 @@ def _ask_approval() -> bool:
     return ans in ("y", "yes")
 
 
+def _ask_clarification(question: str, round_index: int, max_rounds: int) -> str:
+    print(f"\n[PM CLARIFICATION {round_index}/{max_rounds}] {question}")
+    return input("Your answer: ").strip()
+
+
 def run(requirement: str) -> int:
-    state = PipelineState(requirement=requirement)
+    request_id = str(uuid.uuid4())
+    state = PipelineState(
+        requirement=requirement,
+        request_id=request_id,
+        source_type="cli",
+        source_id=request_id,
+    )
+    repo_root = os.path.dirname(__file__)
+    context_store = PMContextStore(repo_root=repo_root)
+    print(f"[REQUEST ID] {request_id}")
 
     # 1) PM creates plan (reasoning lives only in PM service)
     try:
-        state.plan = create_plan(requirement=requirement)
+        state.plan = create_plan(
+            requirement=requirement,
+            repo_name="ai-orchestrator",
+            request_id=state.request_id,
+            context_store=context_store,
+            ask_user=_ask_clarification,
+            max_rounds=3,
+        )
     except PMServiceError as e:
         print(f"[PM ERROR] {e}")
         return 1

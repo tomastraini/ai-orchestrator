@@ -9,6 +9,9 @@ from typing import Any, Dict, Optional
 @dataclass
 class PipelineState:
     requirement: str
+    request_id: Optional[str] = None
+    source_type: str = "cli"
+    source_id: Optional[str] = None
     plan: Optional[Dict[str, Any]] = None
 
     branch_name: Optional[str] = None
