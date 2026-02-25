@@ -12,7 +12,7 @@ def _utc_now_iso() -> str:
 
 class PMContextStore:
     """
-    JSON-backed store for request-scoped PM clarification context.
+    JSON-backed store that keeps exactly one latest PM context.
     """
 
     def __init__(self, repo_root: str, relative_store_path: str = ".orchestrator/pm_context.json"):
@@ -26,17 +26,17 @@ class PMContextStore:
 
     def _read_all(self) -> Dict[str, Any]:
         if not os.path.exists(self.store_path):
-            return {"requests": {}}
+            return {"latest_context": None}
 
         with open(self.store_path, "r", encoding="utf-8") as fh:
             raw = fh.read().strip()
             if not raw:
-                return {"requests": {}}
+                return {"latest_context": None}
             data = json.loads(raw)
             if not isinstance(data, dict):
-                return {"requests": {}}
-            if "requests" not in data or not isinstance(data["requests"], dict):
-                data["requests"] = {}
+                return {"latest_context": None}
+            if "latest_context" not in data:
+                data["latest_context"] = None
             return data
 
     def _write_all(self, data: Dict[str, Any]) -> None:
@@ -46,9 +46,8 @@ class PMContextStore:
 
     def load_context(self, request_id: str, original_requirement: Optional[str] = None) -> Dict[str, Any]:
         data = self._read_all()
-        requests = data["requests"]
-        entry = requests.get(request_id)
-        if isinstance(entry, dict):
+        entry = data.get("latest_context")
+        if isinstance(entry, dict) and entry.get("request_id") == request_id:
             return entry
 
         new_entry: Dict[str, Any] = {
@@ -60,19 +59,17 @@ class PMContextStore:
             "created_at": _utc_now_iso(),
             "updated_at": _utc_now_iso(),
         }
-        requests[request_id] = new_entry
+        data["latest_context"] = new_entry
         self._write_all(data)
         return new_entry
 
     def update_hypothesis(self, request_id: str, hypothesis: Dict[str, Any]) -> None:
         data = self._read_all()
-        requests = data["requests"]
-        entry = requests.get(request_id)
-        if not isinstance(entry, dict):
+        entry = data.get("latest_context")
+        if not isinstance(entry, dict) or entry.get("request_id") != request_id:
             entry = self.load_context(request_id)
             data = self._read_all()
-            requests = data["requests"]
-            entry = requests.get(request_id)
+            entry = data.get("latest_context")
 
         entry["current_hypothesis"] = hypothesis
         entry["updated_at"] = _utc_now_iso()
@@ -80,13 +77,11 @@ class PMContextStore:
 
     def append_round(self, request_id: str, question: str, answer: str) -> None:
         data = self._read_all()
-        requests = data["requests"]
-        entry = requests.get(request_id)
-        if not isinstance(entry, dict):
+        entry = data.get("latest_context")
+        if not isinstance(entry, dict) or entry.get("request_id") != request_id:
             entry = self.load_context(request_id)
             data = self._read_all()
-            requests = data["requests"]
-            entry = requests.get(request_id)
+            entry = data.get("latest_context")
 
         rounds = entry.get("rounds")
         if not isinstance(rounds, list):
@@ -105,13 +100,11 @@ class PMContextStore:
 
     def save_final_plan(self, request_id: str, plan: Dict[str, Any]) -> None:
         data = self._read_all()
-        requests = data["requests"]
-        entry = requests.get(request_id)
-        if not isinstance(entry, dict):
+        entry = data.get("latest_context")
+        if not isinstance(entry, dict) or entry.get("request_id") != request_id:
             entry = self.load_context(request_id)
             data = self._read_all()
-            requests = data["requests"]
-            entry = requests.get(request_id)
+            entry = data.get("latest_context")
 
         entry["final_plan"] = plan
         entry["updated_at"] = _utc_now_iso()
@@ -119,7 +112,7 @@ class PMContextStore:
 
     def clear_context(self, request_id: str) -> None:
         data = self._read_all()
-        requests = data["requests"]
-        if request_id in requests:
-            del requests[request_id]
+        entry = data.get("latest_context")
+        if isinstance(entry, dict) and entry.get("request_id") == request_id:
+            data["latest_context"] = None
             self._write_all(data)

@@ -13,7 +13,7 @@ from services.pm_context_store import PMContextStore
 from services.dev_service import DevService
 
 
-REPO_PATH = os.path.join(os.path.dirname(__file__), "repos", "Clinigma-Transcripts")
+PROJECTS_ROOT = os.path.join(os.path.dirname(__file__), "projects")
 
 
 def _print_plan(plan: Dict[str, Any]) -> None:
@@ -29,6 +29,11 @@ def _ask_approval() -> bool:
 
 def _ask_clarification(question: str, round_index: int, max_rounds: int) -> str:
     print(f"\n[PM CLARIFICATION {round_index}/{max_rounds}] {question}")
+    return input("Your answer: ").strip()
+
+
+def _ask_dev_clarification(question: str) -> str:
+    print(f"\n[DEV CLARIFICATION] {question}")
     return input("Your answer: ").strip()
 
 
@@ -66,14 +71,22 @@ def run(requirement: str) -> int:
         return 0
 
     # 3) Dev executes plan (engineering brain)
-    dev = DevService(repo_path=REPO_PATH)
-    result = dev.execute_plan(state.plan)
+    dev = DevService(scope_root=PROJECTS_ROOT)
+    result = dev.execute_plan(
+        state.plan,
+        request_id=state.request_id,
+        ask_user=_ask_dev_clarification,
+    )
 
     state.branch_name = result.get("branch_name")
     state.build_logs = result.get("build_logs")
     state.dev_status = result.get("status") or "unknown"
 
     print(f"[DEV STATUS] {state.dev_status}")
+    if state.build_logs:
+        print("\n===== DEV LOGS =====")
+        print(state.build_logs)
+        print("====================\n")
     if state.branch_name:
         print(f"[BRANCH] {state.branch_name}")
 

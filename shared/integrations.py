@@ -50,6 +50,49 @@ class PRNotifier(Protocol):
         raise NotImplementedError
 
 
+class PMQuestionDispatcher(Protocol):
+    def send_questions(
+        self,
+        *,
+        request_id: str,
+        questions: list[str],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Dispatch PM clarification questions (future: Teams/email/chat integrations).
+        """
+        raise NotImplementedError
+
+
+class ApprovalSource(Protocol):
+    def await_approval(
+        self,
+        *,
+        request_id: str,
+        plan_summary: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """
+        Obtain plan approval from user/system source (future: Teams/Jira).
+        """
+        raise NotImplementedError
+
+
+class DevCompletionPublisher(Protocol):
+    def publish_dev_completion(
+        self,
+        *,
+        request_id: str,
+        status: str,
+        summary: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Publish completion event for downstream PR/Jira workflows.
+        """
+        raise NotImplementedError
+
+
 class NullWorkItemTracker:
     def update_status(
         self,
@@ -73,3 +116,41 @@ class NullPRNotifier:
     ) -> None:
         # No-op notifier for local CLI-only runs.
         _ = (pr_url, title, summary, metadata)
+
+
+class NullPMQuestionDispatcher:
+    def send_questions(
+        self,
+        *,
+        request_id: str,
+        questions: list[str],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        # No-op for local CLI-only runs.
+        _ = (request_id, questions, metadata)
+
+
+class NullApprovalSource:
+    def await_approval(
+        self,
+        *,
+        request_id: str,
+        plan_summary: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        # Local fallback defaults to approval; orchestrator CLI remains source of truth.
+        _ = (request_id, plan_summary, metadata)
+        return True
+
+
+class NullDevCompletionPublisher:
+    def publish_dev_completion(
+        self,
+        *,
+        request_id: str,
+        status: str,
+        summary: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        # No-op for local CLI-only runs.
+        _ = (request_id, status, summary, metadata)
