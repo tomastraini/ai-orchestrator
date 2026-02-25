@@ -89,6 +89,45 @@ def _normalize_execution_step(
     cwd: str,
     purpose: str,
 ) -> Dict[str, str]:
+    def _relativize_scaffold_target(token: str, cwd_norm: str, project_root_norm: str) -> str:
+        target = token.strip().replace("\\", "/").lstrip("./")
+        if not target.startswith("projects/"):
+            return token
+        if target == cwd_norm or target == project_root_norm:
+            return "."
+        if cwd_norm and target.startswith(f"{cwd_norm}/"):
+            return target[len(cwd_norm) + 1 :] or "."
+        if project_root_norm and target.startswith(f"{project_root_norm}/") and cwd_norm == project_root_norm:
+            return target[len(project_root_norm) + 1 :] or "."
+        return token
+
+    def _normalize_scaffold_target_arg(cmd_str: str, cwd_norm: str, project_root_norm: str) -> str:
+        tokens = cmd_str.split()
+        low_tokens = [t.lower() for t in tokens]
+        if not tokens:
+            return cmd_str
+
+        # create-react-app <target>
+        if any("create-react-app" in t for t in low_tokens):
+            for i, tok in enumerate(low_tokens):
+                if "create-react-app" in tok and len(tokens) > i + 1:
+                    tokens[i + 1] = _relativize_scaffold_target(tokens[i + 1], cwd_norm, project_root_norm)
+                    return " ".join(tokens)
+
+        # create-vite <target> OR npm create vite@latest <target>
+        if any("create-vite" in t for t in low_tokens):
+            for i, tok in enumerate(low_tokens):
+                if "create-vite" in tok and len(tokens) > i + 1 and not tokens[i + 1].startswith("-"):
+                    tokens[i + 1] = _relativize_scaffold_target(tokens[i + 1], cwd_norm, project_root_norm)
+                    return " ".join(tokens)
+        if "create" in low_tokens and any("vite" in t for t in low_tokens):
+            for i, tok in enumerate(low_tokens):
+                if tok == "create" and len(tokens) > i + 2 and "vite" in low_tokens[i + 1]:
+                    if not tokens[i + 2].startswith("-"):
+                        tokens[i + 2] = _relativize_scaffold_target(tokens[i + 2], cwd_norm, project_root_norm)
+                        return " ".join(tokens)
+        return cmd_str
+
     cmd = command.strip()
     low = cmd.lower()
 
@@ -112,6 +151,8 @@ def _normalize_execution_step(
     if normalized_cwd.startswith("./"):
         normalized_cwd = normalized_cwd[2:]
     normalized_cwd = _normalize_projects_path(normalized_cwd, project_root)
+    cmd = _normalize_scaffold_target_arg(cmd, normalized_cwd, project_root)
+    low = cmd.lower()
 
     # Force non-interactive scaffold defaults.
     if "create-react-app" in low and "--use-npm" not in low:
@@ -125,8 +166,9 @@ def _normalize_execution_step(
                 app_target = tokens[cra_idx + 1]
                 normalized_target = app_target.replace("\\", "/").strip().lstrip("./")
                 if normalized_target.startswith("projects/"):
-                    # Scaffold in current dir when target redundantly includes projects path.
-                    tokens[cra_idx + 1] = "."
+                    tokens[cra_idx + 1] = _relativize_scaffold_target(
+                        normalized_target, normalized_cwd, project_root
+                    )
                     cmd = " ".join(tokens)
         except StopIteration:
             pass

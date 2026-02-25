@@ -13,6 +13,10 @@ class PathingTests(unittest.TestCase):
         )
         self.assertEqual(path, "projects/calculator")
 
+    def test_canonical_projects_path_defaults_when_invalid(self) -> None:
+        path = canonical_projects_path("not-projects/calc", "projects/calc")
+        self.assertEqual(path, "projects/calc")
+
 
 if __name__ == "__main__":
     unittest.main()

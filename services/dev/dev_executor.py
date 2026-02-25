@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import threading
 import time
@@ -13,11 +14,18 @@ from services.dev.command_policy import (
     normalize_command_for_stack,
     normalize_non_interactive,
 )
+from shared.pathing import _collapse_nested_projects_segments
 from shared.dev_schemas import DevTask
 
 
 class DevExecutorError(RuntimeError):
     pass
+
+
+PROMPT_REGEX = re.compile(
+    r"(ok to proceed\??|proceed\??|\[y/n\]|\(y/n\)|\(y/N\)|\(Y/n\)|confirm\??)",
+    re.IGNORECASE,
+)
 
 
 def _normalize_scope_path(path: str) -> str:
@@ -39,9 +47,11 @@ def _resolve_cwd(scope_root: str, raw_cwd: str) -> str:
     if not raw or raw == "." or raw == "projects":
         return _assert_within_scope(scope_root, scope_root)
 
-    raw_norm = raw.replace("\\", "/")
+    raw_norm = _collapse_nested_projects_segments(raw.replace("\\", "/"))
+    if raw_norm == "projects":
+        raw_norm = "."
     while raw_norm.startswith("projects/"):
-        raw_norm = raw_norm.split("/", 1)[1] if "/" in raw_norm else ""
+        raw_norm = raw_norm.split("/", 1)[1] if "/" in raw_norm else "."
     raw = raw_norm or "."
 
     if os.path.isabs(raw):
@@ -52,6 +62,30 @@ def _resolve_cwd(scope_root: str, raw_cwd: str) -> str:
 def _is_blocked_command(command: str) -> bool:
     low = command.lower()
     return "git push" in low
+
+
+def _violates_constraints(command: str, constraints: List[str]) -> Optional[str]:
+    low_cmd = f" {command.lower()} "
+    for raw_constraint in constraints:
+        constraint = str(raw_constraint or "").strip().lower()
+        if not constraint:
+            continue
+        if ("no git push" in constraint or "do not push" in constraint) and " git push " in low_cmd:
+            return f"violates constraint '{raw_constraint}'"
+        if "no git" in constraint and " git " in low_cmd:
+            return f"violates constraint '{raw_constraint}'"
+        if (
+            "no dev server" in constraint
+            or "do not run dev server" in constraint
+            or "do not start server" in constraint
+            or "no npm start" in constraint
+        ) and any(token in low_cmd for token in [" npm start ", " npm run dev ", " pnpm dev ", " yarn dev ", " vite "]):
+            return f"violates constraint '{raw_constraint}'"
+        if ("no install" in constraint or "do not install" in constraint) and any(
+            token in low_cmd for token in [" npm install ", " pnpm install ", " yarn install ", " pip install "]
+        ):
+            return f"violates constraint '{raw_constraint}'"
+    return None
 
 
 def _emit(logs: List[str], message: str, log_sink: Optional[Callable[[str], None]]) -> None:
@@ -97,11 +131,56 @@ def rewrite_command_deterministic(command: str, category: str, stack_hint: str =
         cmd = filtered[0] if filtered else ""
         low = cmd.lower()
 
+    def _normalize_projects_target_token(token: str, cwd_hint: str) -> str:
+        target = token.strip().replace("\\", "/").lstrip("./")
+        cwd_norm = cwd_hint.strip().replace("\\", "/").lstrip("./")
+        if not target.startswith("projects/"):
+            return token
+        if cwd_norm in {"", "."}:
+            return "."
+        if target == cwd_norm:
+            return "."
+        if cwd_norm and target.startswith(f"{cwd_norm}/"):
+            return target[len(cwd_norm) + 1 :] or "."
+        return token
+
     # Normalize known bootstrap generators to non-interactive npm defaults.
     if "create-react-app" in low:
+        parts = cmd.split()
+        try:
+            idx = next(i for i, tok in enumerate(parts) if "create-react-app" in tok.lower())
+            if len(parts) > idx + 1:
+                parts[idx + 1] = _normalize_projects_target_token(parts[idx + 1], ".")
+                cmd = " ".join(parts)
+                low = cmd.lower()
+        except StopIteration:
+            pass
         if "--use-npm" not in low:
             cmd = f"{cmd} --use-npm"
         return cmd
+
+    if "create-vite" in low or ("npm create" in low and "vite" in low):
+        parts = cmd.split()
+        target_idx = -1
+        if any("create-vite" in tok.lower() for tok in parts):
+            for i, tok in enumerate(parts):
+                if "create-vite" in tok.lower():
+                    if len(parts) > i + 1 and not parts[i + 1].startswith("-"):
+                        target_idx = i + 1
+                    break
+        else:
+            # npm create vite@latest <target> -- --template react-ts
+            for i, tok in enumerate(parts):
+                if tok.lower() == "create" and len(parts) > i + 2:
+                    candidate_tool = parts[i + 1].lower()
+                    candidate_target = parts[i + 2]
+                    if "vite" in candidate_tool and not candidate_target.startswith("-"):
+                        target_idx = i + 2
+                        break
+        if target_idx >= 0:
+            parts[target_idx] = _normalize_projects_target_token(parts[target_idx], ".")
+            cmd = " ".join(parts)
+        return normalize_command_for_stack(normalize_non_interactive(cmd), stack_hint)
 
     if "nest new" in low and "@nestjs/cli" not in low:
         # Convert to deterministic non-interactive npx form.
@@ -136,6 +215,8 @@ def _run_once(
     timeout_seconds: int,
     log_sink: Optional[Callable[[str], None]] = None,
     heartbeat_seconds: float = 15.0,
+    ask_runtime_prompt: Optional[Callable[[str], str]] = None,
+    interactive_prompt_timeout_seconds: float = 60.0,
 ) -> Tuple[List[str], Optional[str], Dict[str, Any]]:
     logs: List[str] = []
     started = time.time()
@@ -145,6 +226,7 @@ def _run_once(
             command,
             cwd=cwd,
             shell=True,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -172,6 +254,7 @@ def _run_once(
         t_err.start()
 
         last_activity = time.time()
+        pending_prompt_started_at: Optional[float] = None
         timeout_at = started + float(timeout_seconds)
         while True:
             now = time.time()
@@ -189,9 +272,45 @@ def _run_once(
                 else:
                     stderr_chunks.append(line)
                     _emit(logs, f"[STREAM_STDERR] {task_id} {line}", log_sink)
+                if PROMPT_REGEX.search(line):
+                    prompt_text = line.strip()
+                    _emit(logs, f"[INTERACTIVE_PROMPT] {task_id} detected prompt: {prompt_text}", log_sink)
+                    if callable(ask_runtime_prompt):
+                        user_answer = (ask_runtime_prompt(prompt_text) or "").strip()
+                        normalized = user_answer.lower()
+                        response = "y" if normalized in {"y", "yes", "true", "1", "ok", "approve"} else "n"
+                    else:
+                        _emit(
+                            logs,
+                            f"[INTERACTIVE_PROMPT] {task_id} no runtime callback; defaulting to safe reject",
+                            log_sink,
+                        )
+                        response = "n"
+                    try:
+                        if proc.stdin is not None:
+                            proc.stdin.write(f"{response}\n")
+                            proc.stdin.flush()
+                            _emit(
+                                logs,
+                                f"[INTERACTIVE_PROMPT] {task_id} forwarded response='{response}'",
+                                log_sink,
+                            )
+                    except Exception as e:
+                        _emit(logs, f"[INTERACTIVE_PROMPT_ERROR] {task_id} failed to send response: {e}", log_sink)
+                    pending_prompt_started_at = now
                 last_activity = now
             except Empty:
                 pass
+
+            if pending_prompt_started_at is not None:
+                if (now - pending_prompt_started_at) >= interactive_prompt_timeout_seconds:
+                    proc.kill()
+                    _emit(
+                        logs,
+                        f"[INTERACTIVE_TIMEOUT] {task_id} unresolved prompt exceeded {interactive_prompt_timeout_seconds}s",
+                        log_sink,
+                    )
+                    raise subprocess.TimeoutExpired(command, timeout_seconds)
 
             if proc.poll() is not None and line_queue.empty():
                 break
@@ -207,6 +326,11 @@ def _run_once(
 
         t_out.join(timeout=1.0)
         t_err.join(timeout=1.0)
+        try:
+            if proc.stdin is not None:
+                proc.stdin.close()
+        except Exception:
+            pass
         elapsed_ms = int((time.time() - started) * 1000)
         stdout = "\n".join(chunk for chunk in stdout_chunks if chunk).strip()
         stderr = "\n".join(chunk for chunk in stderr_chunks if chunk).strip()
@@ -270,13 +394,17 @@ def execute_dev_tasks(
     log_sink: Optional[Callable[[str], None]] = None,
     heartbeat_seconds: float = 15.0,
     ask_confirmation: Optional[Callable[[str], bool]] = None,
+    ask_runtime_prompt: Optional[Callable[[str], str]] = None,
     stack_hint: str = "generic",
+    interactive_prompt_timeout_seconds: float = 60.0,
+    constraints: Optional[List[str]] = None,
 ) -> Tuple[List[str], List[str], List[str], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
     logs: List[str] = []
     touched_paths: List[str] = []
     errors: List[str] = []
     attempt_history: List[Dict[str, Any]] = []
     pending_llm_task: Optional[Dict[str, Any]] = None
+    active_constraints = constraints or []
 
     scope_abs = _normalize_scope_path(scope_root)
     os.makedirs(scope_abs, exist_ok=True)
@@ -288,6 +416,10 @@ def execute_dev_tasks(
 
         if _is_blocked_command(task.command):
             errors.append(f"[BLOCKED] {task.id}: outbound push is disabled ('{task.command}')")
+            break
+        violated_reason = _violates_constraints(task.command, active_constraints)
+        if violated_reason:
+            errors.append(f"[BLOCKED] {task.id}: {violated_reason} ('{task.command}')")
             break
         is_risky, reason = assess_risk(task.command)
         if is_risky:
@@ -329,6 +461,8 @@ def execute_dev_tasks(
                 timeout_seconds=timeout_seconds,
                 log_sink=log_sink,
                 heartbeat_seconds=heartbeat_seconds,
+                ask_runtime_prompt=ask_runtime_prompt,
+                interactive_prompt_timeout_seconds=interactive_prompt_timeout_seconds,
             )
             attempt["attempt"] = attempt_idx
             attempt["strategy"] = strategy
@@ -407,6 +541,8 @@ def execute_single_recovery_command(
     timeout_seconds: int = 900,
     log_sink: Optional[Callable[[str], None]] = None,
     heartbeat_seconds: float = 15.0,
+    ask_runtime_prompt: Optional[Callable[[str], str]] = None,
+    interactive_prompt_timeout_seconds: float = 60.0,
 ) -> Tuple[List[str], Optional[str], Dict[str, Any]]:
     scope_abs = _normalize_scope_path(scope_root)
     if _is_blocked_command(command):
@@ -433,4 +569,6 @@ def execute_single_recovery_command(
         timeout_seconds=timeout_seconds,
         log_sink=log_sink,
         heartbeat_seconds=heartbeat_seconds,
+        ask_runtime_prompt=ask_runtime_prompt,
+        interactive_prompt_timeout_seconds=interactive_prompt_timeout_seconds,
     )

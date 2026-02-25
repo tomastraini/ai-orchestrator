@@ -52,6 +52,13 @@ class DevExecutorTests(unittest.TestCase):
         self.assertIn("--package-manager npm", nest)
         self.assertIn("--skip-git", nest)
 
+    def test_deterministic_rewrite_normalizes_vite_target(self) -> None:
+        vite = rewrite_command_deterministic(
+            "npm create vite@latest projects/react-calculator -- --template react-ts",
+            "path_issue",
+        )
+        self.assertIn("npm create vite@latest .", vite)
+
     def test_retry_budget_exhaustion_without_llm_reserve(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tasks = [
@@ -115,6 +122,24 @@ class DevExecutorTests(unittest.TestCase):
             _, touched, errors, _, _ = execute_dev_tasks(tasks, scope_root=tmp)
             self.assertEqual(errors, [], msg=str(errors))
             self.assertTrue(any("calculator" in path for path in touched), msg=str(touched))
+            self.assertFalse(any("projects/calculator/projects/calculator" in p.replace("\\", "/") for p in touched))
+
+    def test_constraints_block_dev_server_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tasks = [
+                DevTask(
+                    id="t5b",
+                    description="blocked by constraint",
+                    command="npm start",
+                    cwd=".",
+                )
+            ]
+            _, _, errors, _, _ = execute_dev_tasks(
+                tasks,
+                scope_root=tmp,
+                constraints=["Do not run dev server in bootstrap"],
+            )
+            self.assertTrue(any("violates constraint" in e for e in errors), msg=str(errors))
 
     def test_streams_output_to_log_sink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -156,6 +181,30 @@ class DevExecutorTests(unittest.TestCase):
             )
             self.assertEqual(errors, [], msg=str(errors))
             self.assertTrue(any("[HEARTBEAT]" in line for line in captured), msg=str(captured))
+
+    def test_runtime_prompt_callback_forwards_response(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            captured: list[str] = []
+            prompts: list[str] = []
+            tasks = [
+                DevTask(
+                    id="t8",
+                    description="interactive prompt handled",
+                    command="python -c \"print('Ok to proceed? (y/N)'); x=input(); print('answer=' + x)\"",
+                    cwd=".",
+                )
+            ]
+            logs, _, errors, _, _ = execute_dev_tasks(
+                tasks,
+                scope_root=tmp,
+                log_sink=captured.append,
+                ask_runtime_prompt=lambda q: (prompts.append(q) or "y"),
+                heartbeat_seconds=0.1,
+            )
+            self.assertEqual(errors, [], msg=str(errors))
+            self.assertTrue(any("[INTERACTIVE_PROMPT]" in line for line in logs), msg=str(logs))
+            self.assertTrue(any("forwarded response='y'" in line for line in logs), msg=str(logs))
+            self.assertTrue(any("Ok to proceed?" in q for q in prompts), msg=str(prompts))
 
 
 if __name__ == "__main__":

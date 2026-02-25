@@ -72,6 +72,21 @@ class PMHandoffStoreTests(unittest.TestCase):
                 payload = json.load(fh)
             self.assertEqual(payload["latest_handoff"]["request_id"], request_id)
 
+    def test_handoff_normalizes_redundant_vite_target_path(self) -> None:
+        plan = self._sample_plan()
+        plan["bootstrap_commands"] = [
+            {
+                "cwd": "projects/calculator",
+                "command": "npm create vite@latest projects/calculator -- --template react-ts",
+                "purpose": "bootstrap frontend",
+            }
+        ]
+        handoff = build_dev_handoff(request_id="req-handoff-2", plan=plan, rounds=[])
+        self.assertEqual(len(handoff.get("execution_steps", [])), 1)
+        step = handoff["execution_steps"][0]
+        self.assertEqual(step["cwd"], "projects/calculator")
+        self.assertIn("npm create vite@latest .", step["command"])
+
 
 if __name__ == "__main__":
     unittest.main()

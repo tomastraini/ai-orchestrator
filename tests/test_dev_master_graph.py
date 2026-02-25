@@ -33,7 +33,7 @@ class DevMasterGraphTests(unittest.TestCase):
                 }
             ],
             "constraints": ["Do not push"],
-            "validation": ["Build passes"],
+            "validation": ["python -c \"print('ok')\""],
             "clarification_summary": [],
         }
 
@@ -150,6 +150,58 @@ class DevMasterGraphTests(unittest.TestCase):
         self.assertEqual(state["status"], "completed")
         self.assertTrue(any("[PHASE_START] ingest_pm_plan" in line for line in captured), msg=str(captured))
         self.assertTrue(any("[PHASE] bootstrap" in line for line in captured), msg=str(captured))
+
+    def test_runtime_prompt_wiring_visible_in_logs(self) -> None:
+        plan = self._sample_plan()
+        plan["bootstrap_commands"] = [
+            {
+                "cwd": ".",
+                "command": "python -c \"print('Proceed? (y/N)'); x=input(); print(x)\"",
+                "purpose": "runtime prompt flow",
+            }
+        ]
+        graph = DevMasterGraph()
+        captured: list[str] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            state = graph.run(
+                request_id="req-runtime-prompt-1",
+                plan=plan,
+                scope_root=tmp,
+                ask_user=lambda q: "y" if "[DEV RUNTIME PROMPT]" in q else "n/a",
+                log_sink=captured.append,
+            )
+        self.assertEqual(state["status"], "completed", msg=str(state.get("errors", [])))
+        self.assertTrue(any("[INTERACTIVE_PROMPT]" in line for line in captured), msg=str(captured))
+
+    def test_validation_fails_when_pm_requirement_is_non_executable(self) -> None:
+        plan = self._sample_plan()
+        plan["validation"] = ["TypeScript compilation yields no type errors"]
+        graph = DevMasterGraph()
+        with tempfile.TemporaryDirectory() as tmp:
+            state = graph.run(
+                request_id="req-validation-unresolved-1",
+                plan=plan,
+                scope_root=tmp,
+                ask_user=lambda _: "n/a",
+            )
+        self.assertEqual(state.get("validation_status"), "failed")
+        self.assertEqual(state.get("status"), "implementation_failed")
+        self.assertTrue(
+            any("none were executable" in err.lower() for err in state.get("errors", [])),
+            msg=str(state.get("errors", [])),
+        )
+
+    def test_resolve_target_file_path_prefers_active_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            active_root = f"{tmp}/projects/calc"
+            resolved = DevMasterGraph._resolve_target_file_path(
+                scope_root=tmp,
+                project_root="projects/calc",
+                active_project_root=active_root,
+                expected_path_hint="projects/calc/src/App.tsx",
+                file_name="App.tsx",
+            )
+            self.assertEqual(resolved.replace("\\", "/"), f"{active_root}/src/App.tsx".replace("\\", "/"))
 
 
 if __name__ == "__main__":

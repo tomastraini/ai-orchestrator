@@ -53,6 +53,21 @@ class DevGraphState(TypedDict, total=False):
 
 
 class DevMasterGraph:
+    VALIDATION_COMMAND_PREFIXES = (
+        "npm ",
+        "pnpm ",
+        "yarn ",
+        "python ",
+        "pytest",
+        "dotnet ",
+        "bundle ",
+        "rake ",
+        "make ",
+        "./",
+        "bash ",
+        "sh ",
+    )
+
     def __init__(self) -> None:
         graph = StateGraph(DevGraphState)
         graph.add_node("ingest_pm_plan", self._ingest_pm_plan)
@@ -266,6 +281,21 @@ class DevMasterGraph:
         return []
 
     @staticmethod
+    def _extract_validation_command(raw: str) -> str:
+        val = (raw or "").strip()
+        if not val:
+            return ""
+        if any(val.startswith(prefix) for prefix in DevMasterGraph.VALIDATION_COMMAND_PREFIXES):
+            return val
+        # Accept backticked shell snippets from PM text, e.g. "Run `npm run build`".
+        backticked = re.findall(r"`([^`]+)`", val)
+        for token in backticked:
+            normalized = token.strip()
+            if any(normalized.startswith(prefix) for prefix in DevMasterGraph.VALIDATION_COMMAND_PREFIXES):
+                return normalized
+        return ""
+
+    @staticmethod
     def _dev_preflight_planning(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "dev_preflight_planning"
         DevMasterGraph._emit(state, "[PHASE_START] dev_preflight_planning")
@@ -277,13 +307,21 @@ class DevMasterGraph:
         state["detected_stacks"] = detected
         state["active_project_root"] = project_dir
 
+        raw_validation_requirements = [
+            str(x).strip()
+            for x in state.get("plan", {}).get("validation", [])
+            if isinstance(x, str) and str(x).strip()
+        ]
         validation_commands: List[str] = []
-        for item in state.get("plan", {}).get("validation", []):
-            if isinstance(item, str):
-                val = item.strip()
-                if any(val.startswith(prefix) for prefix in ["npm ", "pnpm ", "yarn ", "python ", "pytest", "dotnet ", "bundle ", "rake "]):
-                    validation_commands.append(val)
-        if not validation_commands:
+        unresolved_validation_requirements: List[str] = []
+        for requirement in raw_validation_requirements:
+            cmd = DevMasterGraph._extract_validation_command(requirement)
+            if cmd:
+                validation_commands.append(cmd)
+            else:
+                unresolved_validation_requirements.append(requirement)
+
+        if not validation_commands and not raw_validation_requirements:
             validation_commands = DevMasterGraph._default_validation_commands(detected)
 
         state["dev_preflight_plan"] = {
@@ -291,6 +329,8 @@ class DevMasterGraph:
             "active_project_root": project_dir,
             "detected_stacks": detected,
             "validation_commands": validation_commands,
+            "raw_validation_requirements": raw_validation_requirements,
+            "unresolved_validation_requirements": unresolved_validation_requirements,
         }
         state["validation_tasks"] = [
             DevTask(
@@ -310,6 +350,11 @@ class DevMasterGraph:
             DevMasterGraph._emit(state, f"[PREFLIGHT] validation_commands={validation_commands}")
         else:
             DevMasterGraph._emit(state, "[PREFLIGHT] no executable validation commands inferred")
+        if unresolved_validation_requirements:
+            DevMasterGraph._emit(
+                state,
+                f"[PREFLIGHT] unresolved_validation_requirements={unresolved_validation_requirements}",
+            )
         state["phase_status"]["dev_preflight_planning"] = "completed"
         return state
 
@@ -362,6 +407,11 @@ class DevMasterGraph:
         state["current_step"] = "execute_bootstrap_phase"
         DevMasterGraph._emit(state, "[PHASE_START] execute_bootstrap_phase")
         DevMasterGraph._emit(state, "[PHASE] bootstrap")
+        plan_constraints = [
+            str(x).strip()
+            for x in state.get("plan", {}).get("constraints", [])
+            if isinstance(x, str) and str(x).strip()
+        ]
         logs, touched_paths, errors, attempt_history, pending_llm_task = execute_dev_tasks(
             state.get("bootstrap_tasks", []),
             scope_root=state["scope_root"],
@@ -369,7 +419,10 @@ class DevMasterGraph:
             reserve_last_for_llm=True,
             log_sink=state.get("log_sink"),
             ask_confirmation=(lambda q: bool(state.get("ask_user")(q).strip().lower() in {"y", "yes", "true", "1"})) if callable(state.get("ask_user")) else None,
+            ask_runtime_prompt=(lambda q: state.get("ask_user")(f"[DEV RUNTIME PROMPT] {q} (y/N)")) if callable(state.get("ask_user")) else None,
             stack_hint=(state.get("detected_stacks") or ["generic"])[0],
+            interactive_prompt_timeout_seconds=60.0,
+            constraints=plan_constraints,
         )
         state["logs"].extend(logs)
         state["touched_paths"].extend(touched_paths)
@@ -462,6 +515,8 @@ class DevMasterGraph:
             cwd=str(pending_llm_task["cwd"]),
             command=corrected_command,
             log_sink=state.get("log_sink"),
+            ask_runtime_prompt=(lambda q: state.get("ask_user")(f"[DEV RUNTIME PROMPT] {q} (y/N)")) if callable(state.get("ask_user")) else None,
+            interactive_prompt_timeout_seconds=60.0,
         )
         recover_attempt["attempt"] = int(state.get("max_retries", 5))
         recover_attempt["strategy"] = "llm_rewrite"
@@ -526,26 +581,98 @@ class DevMasterGraph:
         return safe_path
 
     @staticmethod
+    def _resolve_target_file_path(
+        *,
+        scope_root: str,
+        project_root: str,
+        active_project_root: str,
+        expected_path_hint: str,
+        file_name: str,
+    ) -> str:
+        scope_abs = os.path.abspath(os.path.normpath(scope_root))
+        expected_norm = (expected_path_hint or "").replace("\\", "/").strip().lstrip("./")
+        project_root_norm = (project_root or "").replace("\\", "/").strip().lstrip("./")
+        file_name_norm = (file_name or "").strip()
+
+        project_name = ""
+        if project_root_norm.startswith("projects/"):
+            parts = [p for p in project_root_norm.split("/") if p]
+            if len(parts) >= 2:
+                project_name = parts[1]
+
+        if active_project_root:
+            active_abs = os.path.abspath(os.path.normpath(active_project_root))
+            if os.path.commonpath([scope_abs, active_abs]) == scope_abs:
+                base_root = active_abs
+            else:
+                raise RuntimeError(f"Active project root escapes scope: {active_project_root}")
+        else:
+            rel = project_root_norm.split("/", 1)[1] if project_root_norm.startswith("projects/") else project_root_norm
+            base_root = os.path.abspath(os.path.join(scope_abs, rel))
+
+        rel_path = expected_norm
+        if expected_norm.startswith("projects/"):
+            parts = [p for p in expected_norm.split("/") if p]
+            if len(parts) >= 3:
+                # If PM project name drifted, still anchor to active root.
+                if project_name and parts[1] != project_name:
+                    rel_path = "/".join(parts[2:])
+                else:
+                    rel_path = "/".join(parts[2:])
+            elif len(parts) == 2:
+                rel_path = file_name_norm or parts[-1]
+            else:
+                rel_path = file_name_norm
+        elif not rel_path:
+            rel_path = file_name_norm
+
+        if not rel_path and file_name_norm:
+            rel_path = file_name_norm
+
+        safe_path = os.path.abspath(os.path.join(base_root, rel_path))
+        if os.path.commonpath([scope_abs, safe_path]) != scope_abs:
+            raise RuntimeError(f"Implementation target escapes scope: {expected_path_hint}")
+        return safe_path
+
+    @staticmethod
     def _discover_existing_path(active_root: str, expected_path_hint: str, file_name: str) -> str:
-        expected_tail = expected_path_hint.replace("\\", "/").strip().split("/", 2)
-        suffix = ""
-        if len(expected_tail) >= 3:
-            suffix = expected_tail[2]
-        targets = [file_name]
-        if suffix:
-            targets.append(suffix.split("/")[-1])
+        expected_norm = expected_path_hint.replace("\\", "/").strip().lstrip("./")
+        targets = [name for name in {file_name.strip(), os.path.basename(expected_norm)} if name]
+        expected_suffix = ""
+        if expected_norm.startswith("projects/"):
+            parts = [p for p in expected_norm.split("/") if p]
+            if len(parts) >= 3:
+                expected_suffix = "/".join(parts[2:])
+        else:
+            expected_suffix = expected_norm
+
+        best_candidate = ""
+        best_score = -1
         for root, dirs, files in os.walk(active_root):
-            dirs[:] = [d for d in dirs if d not in {"node_modules", ".git", ".venv", "__pycache__"}]
+            dirs[:] = [
+                d for d in dirs if d not in {"node_modules", ".git", ".venv", "__pycache__", "dist", "build", ".next"}
+            ]
             for name in files:
                 if name not in targets:
                     continue
                 candidate = os.path.join(root, name)
                 normalized = candidate.replace("\\", "/")
-                if suffix and normalized.endswith(suffix):
+                if expected_suffix and normalized.endswith(expected_suffix):
                     return candidate
-                if name == file_name:
-                    return candidate
-        return ""
+                score = 0
+                if expected_suffix:
+                    exp_dirs = expected_suffix.split("/")[:-1]
+                    rel = os.path.relpath(candidate, active_root).replace("\\", "/")
+                    rel_dirs = rel.split("/")[:-1]
+                    for i, part in enumerate(exp_dirs):
+                        if i < len(rel_dirs) and rel_dirs[i] == part:
+                            score += 1
+                else:
+                    score = 100 - len(os.path.relpath(candidate, active_root).split(os.sep))
+                if score > best_score:
+                    best_candidate = candidate
+                    best_score = score
+        return best_candidate
 
     @staticmethod
     def _comment_for_path(path: str, text: str) -> str:
@@ -571,7 +698,14 @@ class DevMasterGraph:
             os.makedirs(safe_target, exist_ok=True)
             return "ensured_directory", f"pass={pass_index}", safe_target
 
-        if os.path.splitext(safe_target)[1] == "":
+        is_directory_target = modification_type in {"create_directory", "mkdir", "create_dir"}
+        if not is_directory_target and os.path.splitext(file_name)[1]:
+            is_directory_target = False
+        elif os.path.splitext(safe_target)[1] == "":
+            # Keep legacy behavior only for explicit directory targets or extensionless names.
+            is_directory_target = True
+
+        if is_directory_target:
             os.makedirs(safe_target, exist_ok=True)
             return "ensured_path", f"pass={pass_index}", safe_target
 
@@ -632,13 +766,13 @@ class DevMasterGraph:
                     modification_type = str(target.get("modification_type", "")).lower()
                     details = str(target.get("details", "")).strip()
                     file_name = str(target.get("file_name", "")).strip() or os.path.basename(expected)
-                    expected_norm = expected.replace("\\", "/").strip().lstrip("./")
-                    if expected_norm.startswith("projects/") and active_root:
-                        parts = expected_norm.split("/")
-                        rel_tail = "/".join(parts[2:]) if len(parts) > 2 else ""
-                        safe_target = os.path.join(active_root, rel_tail) if rel_tail else active_root
-                    else:
-                        safe_target = DevMasterGraph._resolve_implementation_path(scope_root, project_root, expected)
+                    safe_target = DevMasterGraph._resolve_target_file_path(
+                        scope_root=scope_root,
+                        project_root=project_root,
+                        active_project_root=active_root,
+                        expected_path_hint=expected,
+                        file_name=file_name,
+                    )
                     action, action_note, resolved_target = DevMasterGraph._apply_target_in_pass(
                         safe_target=safe_target,
                         file_name=file_name,
@@ -684,7 +818,23 @@ class DevMasterGraph:
             DevMasterGraph._emit(state, "[VALIDATION] skipped due to previous failure")
             return state
 
+        preflight = state.get("dev_preflight_plan", {}) if isinstance(state.get("dev_preflight_plan"), dict) else {}
+        raw_requirements = preflight.get("raw_validation_requirements", [])
+        unresolved_requirements = preflight.get("unresolved_validation_requirements", [])
         validation_tasks = state.get("validation_tasks", [])
+
+        if raw_requirements and unresolved_requirements and not validation_tasks:
+            msg = (
+                "[VALIDATION] required validations were provided by PM but none were executable: "
+                f"{unresolved_requirements}"
+            )
+            state["errors"].append(msg)
+            state["validation_status"] = "failed"
+            state["status"] = "implementation_failed"
+            state["phase_status"]["execute_validation_phase"] = "failed"
+            DevMasterGraph._emit(state, msg)
+            return state
+
         if not validation_tasks:
             state["validation_status"] = "completed"
             state["phase_status"]["execute_validation_phase"] = "completed"
@@ -698,6 +848,13 @@ class DevMasterGraph:
             reserve_last_for_llm=False,
             log_sink=state.get("log_sink"),
             stack_hint=(state.get("detected_stacks") or ["generic"])[0],
+            ask_runtime_prompt=(lambda q: state.get("ask_user")(f"[DEV RUNTIME PROMPT] {q} (y/N)")) if callable(state.get("ask_user")) else None,
+            interactive_prompt_timeout_seconds=60.0,
+            constraints=[
+                str(x).strip()
+                for x in state.get("plan", {}).get("constraints", [])
+                if isinstance(x, str) and str(x).strip()
+            ],
         )
         state["logs"].extend(logs)
         state["touched_paths"].extend(touched_paths)
