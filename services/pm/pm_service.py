@@ -228,12 +228,12 @@ Wrapper format:
     "target_files": [{{"file_name": "string", "expected_path_hint": "string", "modification_type": "string", "details": "string"}}],
     "constraints": ["string"],
     "validation": ["string"],
-    "clarification_summary": ["string"]
-    "product_contract": {
+    "clarification_summary": ["string"],
+    "product_contract": {{
       "goals": ["string"],
       "acceptance_criteria": ["string"],
       "non_goals": ["string"]
-    },
+    }},
     "ambiguities": ["string"]
   }}
 }}
