@@ -93,6 +93,35 @@ class DevCompletionPublisher(Protocol):
         raise NotImplementedError
 
 
+class PMOutcomePublisher(Protocol):
+    def publish_pm_outcome(
+        self,
+        *,
+        request_id: str,
+        summary: str,
+        plan: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Publish finalized PM outputs for downstream consumers.
+        """
+        raise NotImplementedError
+
+
+class DevHandoffPublisher(Protocol):
+    def publish_dev_handoff(
+        self,
+        *,
+        request_id: str,
+        handoff: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Publish generated PM->Dev handoff artifacts.
+        """
+        raise NotImplementedError
+
+
 class NullWorkItemTracker:
     def update_status(
         self,
@@ -154,3 +183,28 @@ class NullDevCompletionPublisher:
     ) -> None:
         # No-op for local CLI-only runs.
         _ = (request_id, status, summary, metadata)
+
+
+class NullPMOutcomePublisher:
+    def publish_pm_outcome(
+        self,
+        *,
+        request_id: str,
+        summary: str,
+        plan: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        # No-op for local CLI-only runs.
+        _ = (request_id, summary, plan, metadata)
+
+
+class NullDevHandoffPublisher:
+    def publish_dev_handoff(
+        self,
+        *,
+        request_id: str,
+        handoff: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        # No-op for local CLI-only runs.
+        _ = (request_id, handoff, metadata)

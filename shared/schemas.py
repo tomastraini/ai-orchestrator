@@ -34,6 +34,11 @@ def _is_non_empty_str(x: Any) -> bool:
     return isinstance(x, str) and len(x.strip()) > 0
 
 
+def _is_projects_rooted(path: str) -> bool:
+    normalized = path.replace("\\", "/").strip().lower()
+    return normalized == "projects" or normalized.startswith("projects/")
+
+
 def _validate_no_unknown_keys(
     data: Dict[str, Any], allowed_keys: set[str], object_name: str
 ) -> List[str]:
@@ -129,6 +134,18 @@ def validate_plan_json(plan: Any, requirement: Optional[str] = None) -> Tuple[bo
         path_hint = project_ref.get("path_hint")
         if not (path_hint is None or _is_non_empty_str(path_hint)):
             errors.append("Field 'project_ref.path_hint' must be null or a non-empty string.")
+        if (
+            project_mode == "new_project"
+            and isinstance(path_hint, str)
+            and not _is_projects_rooted(path_hint)
+        ):
+            errors.append(
+                "Field 'project_ref.path_hint' must be under 'projects/' when project_mode is 'new_project'."
+            )
+        if project_mode == "new_project" and path_hint is None:
+            errors.append(
+                "Field 'project_ref.path_hint' must be set when project_mode is 'new_project'."
+            )
 
     # stack
     stack = plan.get("stack")
@@ -188,6 +205,14 @@ def validate_plan_json(plan: Any, requirement: Optional[str] = None) -> Tuple[bo
             for k in ["file_name", "expected_path_hint", "modification_type", "details"]:
                 if not _is_non_empty_str(tf.get(k)):
                     errors.append(f"target_files[{i}].{k} must be a non-empty string.")
+            if (
+                project_mode == "new_project"
+                and _is_non_empty_str(tf.get("expected_path_hint"))
+                and not _is_projects_rooted(str(tf.get("expected_path_hint")))
+            ):
+                errors.append(
+                    f"target_files[{i}].expected_path_hint must be under 'projects/' for new projects."
+                )
 
     # constraints
     errors.extend(

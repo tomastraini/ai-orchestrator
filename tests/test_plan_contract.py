@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
 import unittest
 
 from shared.schemas import validate_plan_json
+
+os.environ.setdefault("AZURE_OPENAI_KEY", "test-key")
+from services.pm.pm_service import _normalize_new_project_plan
 
 
 def _base_plan_new_project() -> dict:
@@ -80,6 +84,26 @@ class PlanSchemaTests(unittest.TestCase):
             any("bootstrap_commands" in e and "new_project" in e for e in errors),
             msg=str(errors),
         )
+
+    def test_new_project_requires_projects_root_path_hint(self) -> None:
+        plan = _base_plan_new_project()
+        plan["project_ref"]["path_hint"] = "somewhere-else/calculator"
+        ok, errors = validate_plan_json(plan, requirement="Create calculator app")
+        self.assertFalse(ok)
+        self.assertTrue(any("project_ref.path_hint" in e for e in errors), msg=str(errors))
+
+    def test_pm_normalizes_empty_target_files_for_new_project(self) -> None:
+        plan = _base_plan_new_project()
+        plan["target_files"] = []
+        normalized = _normalize_new_project_plan(plan)
+        ok, errors = validate_plan_json(normalized, requirement="Create calculator app")
+        self.assertTrue(ok, msg=str(errors))
+        self.assertGreaterEqual(len(normalized["target_files"]), 2)
+        for target in normalized["target_files"]:
+            self.assertTrue(
+                str(target["expected_path_hint"]).startswith("projects/"),
+                msg=str(target),
+            )
 
 
 if __name__ == "__main__":

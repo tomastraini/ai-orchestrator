@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+import unittest
+
+from services.pm.dev_handoff_store import DevHandoffStore, build_dev_handoff
+from services.pm.pm_context_store import PMContextStore
+
+
+class PMHandoffStoreTests(unittest.TestCase):
+    def _sample_plan(self) -> dict:
+        return {
+            "summary": "Create calculator app",
+            "project_mode": "new_project",
+            "project_ref": {"name": "calculator", "path_hint": "projects/calculator"},
+            "stack": {
+                "frontend": "React",
+                "backend": "NestJS",
+                "language_preferences": ["TypeScript"],
+            },
+            "bootstrap_commands": [
+                {"cwd": "projects/calculator", "command": "echo bootstrap", "purpose": "bootstrap"}
+            ],
+            "target_files": [
+                {
+                    "file_name": "front-end",
+                    "expected_path_hint": "projects/calculator/front-end",
+                    "modification_type": "create_directory",
+                    "details": "Create frontend folder",
+                }
+            ],
+            "constraints": ["Use TypeScript"],
+            "validation": ["Frontend builds"],
+            "clarification_summary": [],
+        }
+
+    def test_handoff_persisted_in_context_and_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            request_id = "req-handoff-1"
+            rounds = [{"question": "new or existing?", "answer": "new"}]
+            plan = self._sample_plan()
+
+            handoff = build_dev_handoff(request_id=request_id, plan=plan, rounds=rounds)
+
+            context = PMContextStore(repo_root=tmp)
+            context.load_context(request_id=request_id, original_requirement="calculator")
+            context.save_final_plan(request_id=request_id, plan=plan)
+            context.save_dev_handoff(request_id=request_id, handoff=handoff)
+
+            DevHandoffStore(repo_root=tmp).write_latest(handoff)
+
+            latest = context.load_context(request_id=request_id)
+            self.assertEqual(latest["dev_handoff"]["request_id"], request_id)
+            self.assertEqual(latest["dev_handoff"]["project_root"], "projects/calculator")
+
+            handoff_path = os.path.join(tmp, ".orchestrator", "dev_handoff.json")
+            self.assertTrue(os.path.exists(handoff_path))
+            with open(handoff_path, "r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+            self.assertEqual(payload["latest_handoff"]["request_id"], request_id)
+
+
+if __name__ == "__main__":
+    unittest.main()

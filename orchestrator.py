@@ -63,6 +63,9 @@ def run(requirement: str) -> int:
         print(f"[PM ERROR] {e}")
         return 1
 
+    latest_context = context_store.load_context(request_id=state.request_id or "")
+    dev_handoff = latest_context.get("dev_handoff") if isinstance(latest_context, dict) else None
+
     _print_plan(state.plan)
 
     # 2) Manual approval gate (deterministic)
@@ -76,6 +79,7 @@ def run(requirement: str) -> int:
         state.plan,
         request_id=state.request_id,
         ask_user=_ask_dev_clarification,
+        handoff=dev_handoff if isinstance(dev_handoff, dict) else None,
     )
 
     state.branch_name = result.get("branch_name")
