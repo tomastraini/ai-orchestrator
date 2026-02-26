@@ -1,0 +1,891 @@
+{
+  "generated_at": "2026-02-26T15:53:00.893772+00:00",
+  "phase": "implementation_index_refresh",
+  "cognition": {
+    "version": "2.0",
+    "generated_at": "2026-02-26T15:53:00.892969+00:00",
+    "project_root": "home/vboxuser/Documents/repositories/ai-orchestrator/projects/phoneword-converter/projects/phoneword-converter",
+    "workspace_hash": "0d6dfa296c69e6d929898fd376bcaf07384f36d0",
+    "provider_capabilities": {
+      "tree_sitter": false,
+      "tree_sitter_languages": false,
+      "libcst": false,
+      "networkx": false,
+      "yaml": true,
+      "orjson": true
+    },
+    "active_root": "home/vboxuser/Documents/repositories/ai-orchestrator/projects/phoneword-converter/projects/phoneword-converter",
+    "file_count": 25,
+    "files": [
+      {
+        "path": "angular.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "README.md",
+        "kind": "doc",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": ".editorconfig",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "tsconfig.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "package-lock.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": ".prettierrc",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": ".gitignore",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "package.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "tsconfig.app.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "tsconfig.spec.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": ".vscode/tasks.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": ".vscode/launch.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": ".vscode/extensions.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": ".vscode/mcp.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "public/favicon.ico",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "src/index.html",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.1,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/styles.css",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "src/main.ts",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.8,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/app/app.routes.ts",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [],
+        "imports": [
+          {
+            "module": "@angular/router",
+            "members": [],
+            "is_external": true
+          }
+        ],
+        "exports": [],
+        "relationships": [
+          {
+            "type": "imports",
+            "target": "@angular/router"
+          }
+        ],
+        "entrypoint_score": 0.13,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/app/phone-mapper.service.ts",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [
+          {
+            "name": "PhoneMapperService",
+            "kind": "class",
+            "line": 6,
+            "end_line": 6
+          }
+        ],
+        "imports": [
+          {
+            "module": "@angular/core",
+            "members": [],
+            "is_external": true
+          }
+        ],
+        "exports": [],
+        "relationships": [
+          {
+            "type": "imports",
+            "target": "@angular/core"
+          }
+        ],
+        "entrypoint_score": 0.0,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/app/app.css",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.1,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/app/app.html",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.1,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/app/app.config.ts",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [],
+        "imports": [
+          {
+            "module": "@angular/core",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "@angular/router",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "src/app/app.routes",
+            "members": [],
+            "is_external": false
+          }
+        ],
+        "exports": [],
+        "relationships": [
+          {
+            "type": "imports",
+            "target": "@angular/core"
+          },
+          {
+            "type": "imports",
+            "target": "@angular/router"
+          },
+          {
+            "type": "imports",
+            "target": "src/app/app.routes"
+          }
+        ],
+        "entrypoint_score": 0.1,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/app/app.spec.ts",
+        "kind": "test",
+        "language": "typescript",
+        "symbols": [],
+        "imports": [
+          {
+            "module": "@angular/core/testing",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "src/app/app",
+            "members": [],
+            "is_external": false
+          }
+        ],
+        "exports": [],
+        "relationships": [
+          {
+            "type": "imports",
+            "target": "@angular/core/testing"
+          },
+          {
+            "type": "imports",
+            "target": "src/app/app"
+          }
+        ],
+        "entrypoint_score": 0.1,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/app/app.ts",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [
+          {
+            "name": "App",
+            "kind": "class",
+            "line": 10,
+            "end_line": 10
+          }
+        ],
+        "imports": [
+          {
+            "module": "@angular/core",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "@angular/router",
+            "members": [],
+            "is_external": true
+          }
+        ],
+        "exports": [],
+        "relationships": [
+          {
+            "type": "imports",
+            "target": "@angular/core"
+          },
+          {
+            "type": "imports",
+            "target": "@angular/router"
+          }
+        ],
+        "entrypoint_score": 0.13,
+        "confidence": 0.9
+      }
+    ],
+    "symbol_index": {
+      "files": [
+        {
+          "path": "src/app/phone-mapper.service.ts",
+          "language": "javascript",
+          "symbols": [
+            {
+              "name": "PhoneMapperService",
+              "kind": "class",
+              "line": 6,
+              "end_line": 6
+            }
+          ]
+        },
+        {
+          "path": "src/app/app.ts",
+          "language": "javascript",
+          "symbols": [
+            {
+              "name": "App",
+              "kind": "class",
+              "line": 10,
+              "end_line": 10
+            }
+          ]
+        }
+      ],
+      "by_name": {
+        "PhoneMapperService": [
+          "src/app/phone-mapper.service.ts"
+        ],
+        "App": [
+          "src/app/app.ts"
+        ]
+      }
+    },
+    "graph": {
+      "nodes": [
+        "angular.json",
+        "README.md",
+        ".editorconfig",
+        "tsconfig.json",
+        "package-lock.json",
+        ".prettierrc",
+        ".gitignore",
+        "package.json",
+        "tsconfig.app.json",
+        "tsconfig.spec.json",
+        ".vscode/tasks.json",
+        ".vscode/launch.json",
+        ".vscode/extensions.json",
+        ".vscode/mcp.json",
+        "public/favicon.ico",
+        "src/index.html",
+        "src/styles.css",
+        "src/main.ts",
+        "src/app/app.routes.ts",
+        "src/app/phone-mapper.service.ts",
+        "src/app/app.css",
+        "src/app/app.html",
+        "src/app/app.config.ts",
+        "src/app/app.spec.ts",
+        "src/app/app.ts"
+      ],
+      "edges": [
+        {
+          "from": "src/app/app.config.ts",
+          "to": "src/app/app.routes.ts",
+          "type": "imports"
+        },
+        {
+          "from": "src/app/app.spec.ts",
+          "to": "src/app/app.ts",
+          "type": "imports"
+        }
+      ]
+    },
+    "dependency_graph": {
+      "dependencies": [
+        {
+          "name": "@angular/common",
+          "version": "^21.2.0",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "@angular/compiler",
+          "version": "^21.2.0",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "@angular/core",
+          "version": "^21.2.0",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "@angular/forms",
+          "version": "^21.2.0",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "@angular/platform-browser",
+          "version": "^21.2.0",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "@angular/router",
+          "version": "^21.2.0",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "rxjs",
+          "version": "~7.8.0",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "tslib",
+          "version": "^2.3.0",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "@angular/build",
+          "version": "^21.2.0",
+          "source": "npm",
+          "scope": "devDependencies"
+        },
+        {
+          "name": "@angular/cli",
+          "version": "^21.2.0",
+          "source": "npm",
+          "scope": "devDependencies"
+        },
+        {
+          "name": "@angular/compiler-cli",
+          "version": "^21.2.0",
+          "source": "npm",
+          "scope": "devDependencies"
+        },
+        {
+          "name": "jsdom",
+          "version": "^28.0.0",
+          "source": "npm",
+          "scope": "devDependencies"
+        },
+        {
+          "name": "prettier",
+          "version": "^3.8.1",
+          "source": "npm",
+          "scope": "devDependencies"
+        },
+        {
+          "name": "typescript",
+          "version": "~5.9.2",
+          "source": "npm",
+          "scope": "devDependencies"
+        },
+        {
+          "name": "vitest",
+          "version": "^4.0.8",
+          "source": "npm",
+          "scope": "devDependencies"
+        }
+      ]
+    },
+    "entrypoints": [
+      {
+        "path": "src/main.ts",
+        "score": 0.8,
+        "reasons": [
+          "known_entry_basename",
+          "entrypoint_like_name"
+        ],
+        "aliases": [
+          "src/index.html"
+        ]
+      },
+      {
+        "path": "src/app/app.routes.ts",
+        "score": 0.13,
+        "reasons": [
+          "entrypoint_like_name",
+          "import_graph"
+        ],
+        "aliases": [
+          "src/app/app.css",
+          "src/app/app.html",
+          "src/app/app.config.ts",
+          "src/app/app.spec.ts",
+          "src/app/app.ts"
+        ]
+      },
+      {
+        "path": "src/app/app.ts",
+        "score": 0.13,
+        "reasons": [
+          "entrypoint_like_name",
+          "import_graph"
+        ],
+        "aliases": [
+          "src/app/app.routes.ts",
+          "src/app/app.css",
+          "src/app/app.html",
+          "src/app/app.config.ts",
+          "src/app/app.spec.ts"
+        ]
+      },
+      {
+        "path": "src/index.html",
+        "score": 0.1,
+        "reasons": [
+          "entrypoint_like_name"
+        ],
+        "aliases": [
+          "src/main.ts"
+        ]
+      },
+      {
+        "path": "src/app/app.css",
+        "score": 0.1,
+        "reasons": [
+          "entrypoint_like_name"
+        ],
+        "aliases": [
+          "src/app/app.routes.ts",
+          "src/app/app.html",
+          "src/app/app.config.ts",
+          "src/app/app.spec.ts",
+          "src/app/app.ts"
+        ]
+      },
+      {
+        "path": "src/app/app.html",
+        "score": 0.1,
+        "reasons": [
+          "entrypoint_like_name"
+        ],
+        "aliases": [
+          "src/app/app.routes.ts",
+          "src/app/app.css",
+          "src/app/app.config.ts",
+          "src/app/app.spec.ts",
+          "src/app/app.ts"
+        ]
+      },
+      {
+        "path": "src/app/app.config.ts",
+        "score": 0.1,
+        "reasons": [
+          "entrypoint_like_name"
+        ],
+        "aliases": [
+          "src/app/app.routes.ts",
+          "src/app/app.css",
+          "src/app/app.html",
+          "src/app/app.spec.ts",
+          "src/app/app.ts"
+        ]
+      },
+      {
+        "path": "src/app/app.spec.ts",
+        "score": 0.1,
+        "reasons": [
+          "entrypoint_like_name"
+        ],
+        "aliases": [
+          "src/app/app.routes.ts",
+          "src/app/app.css",
+          "src/app/app.html",
+          "src/app/app.config.ts",
+          "src/app/app.ts"
+        ]
+      }
+    ],
+    "entrypoint_aliases": {
+      "src": [
+        "src/index.html",
+        "src/main.ts"
+      ],
+      "src/app": [
+        "src/app/app.routes.ts",
+        "src/app/app.css",
+        "src/app/app.html",
+        "src/app/app.config.ts",
+        "src/app/app.spec.ts",
+        "src/app/app.ts"
+      ]
+    },
+    "tests": [
+      "src/app/app.spec.ts"
+    ],
+    "test_mappings": [
+      {
+        "test": "src/app/app.spec.ts",
+        "source": "src/app/app.css"
+      }
+    ],
+    "configs": [
+      "package.json",
+      "tsconfig.json"
+    ],
+    "toolchain": [
+      {
+        "name": "node",
+        "confidence": 0.9
+      }
+    ],
+    "path_aliases": {},
+    "architecture_signals": [
+      {
+        "name": "unknown",
+        "confidence": 0.4
+      }
+    ],
+    "resolution_hints": {
+      "by_basename": {
+        "angular.json": [
+          "angular.json"
+        ],
+        "readme.md": [
+          "README.md"
+        ],
+        ".editorconfig": [
+          ".editorconfig"
+        ],
+        "tsconfig.json": [
+          "tsconfig.json"
+        ],
+        "package-lock.json": [
+          "package-lock.json"
+        ],
+        ".prettierrc": [
+          ".prettierrc"
+        ],
+        ".gitignore": [
+          ".gitignore"
+        ],
+        "package.json": [
+          "package.json"
+        ],
+        "tsconfig.app.json": [
+          "tsconfig.app.json"
+        ],
+        "tsconfig.spec.json": [
+          "tsconfig.spec.json"
+        ],
+        "tasks.json": [
+          ".vscode/tasks.json"
+        ],
+        "launch.json": [
+          ".vscode/launch.json"
+        ],
+        "extensions.json": [
+          ".vscode/extensions.json"
+        ],
+        "mcp.json": [
+          ".vscode/mcp.json"
+        ],
+        "favicon.ico": [
+          "public/favicon.ico"
+        ],
+        "index.html": [
+          "src/index.html"
+        ],
+        "styles.css": [
+          "src/styles.css"
+        ],
+        "main.ts": [
+          "src/main.ts"
+        ],
+        "app.routes.ts": [
+          "src/app/app.routes.ts"
+        ],
+        "phone-mapper.service.ts": [
+          "src/app/phone-mapper.service.ts"
+        ],
+        "app.css": [
+          "src/app/app.css"
+        ],
+        "app.html": [
+          "src/app/app.html"
+        ],
+        "app.config.ts": [
+          "src/app/app.config.ts"
+        ],
+        "app.spec.ts": [
+          "src/app/app.spec.ts"
+        ],
+        "app.ts": [
+          "src/app/app.ts"
+        ]
+      },
+      "entrypoint_candidates": [
+        {
+          "path": "src/main.ts",
+          "score": 0.8
+        },
+        {
+          "path": "src/app/app.routes.ts",
+          "score": 0.13
+        },
+        {
+          "path": "src/app/app.ts",
+          "score": 0.13
+        },
+        {
+          "path": "src/index.html",
+          "score": 0.1
+        },
+        {
+          "path": "src/app/app.css",
+          "score": 0.1
+        },
+        {
+          "path": "src/app/app.html",
+          "score": 0.1
+        },
+        {
+          "path": "src/app/app.config.ts",
+          "score": 0.1
+        },
+        {
+          "path": "src/app/app.spec.ts",
+          "score": 0.1
+        }
+      ],
+      "entrypoint_aliases": {
+        "src": [
+          "src/index.html",
+          "src/main.ts"
+        ],
+        "src/app": [
+          "src/app/app.routes.ts",
+          "src/app/app.css",
+          "src/app/app.html",
+          "src/app/app.config.ts",
+          "src/app/app.spec.ts",
+          "src/app/app.ts"
+        ]
+      },
+      "ai_ranked_candidates": [
+        {
+          "path": "src/main.ts",
+          "score": 0.8,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "src/app/app.routes.ts",
+          "score": 0.13,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "src/app/app.ts",
+          "score": 0.13,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "src/index.html",
+          "score": 0.1,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "src/app/app.css",
+          "score": 0.1,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "src/app/app.html",
+          "score": 0.1,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "src/app/app.config.ts",
+          "score": 0.1,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "src/app/app.spec.ts",
+          "score": 0.1,
+          "reason": "ai_fallback_ranked"
+        }
+      ]
+    }
+  }
+}
