@@ -411,6 +411,66 @@ class DevMasterGraphTests(unittest.TestCase):
             )
             self.assertGreaterEqual(int(evidence.get("confidence", 0)), 45)
 
+    def test_dotfile_target_is_created_as_file(self) -> None:
+        graph = DevMasterGraph()
+        plan = self._sample_plan()
+        plan["target_files"] = [
+            {
+                "file_name": ".gitignore",
+                "expected_path_hint": "projects/calc/.gitignore",
+                "modification_type": "create",
+                "details": "ignore build artifacts",
+                "creation_policy": "create_if_missing",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            state = graph.run(
+                request_id="dotfile-target-1",
+                plan=plan,
+                scope_root=tmp,
+                ask_user=lambda _: "n/a",
+            )
+            target = os.path.join(tmp, "calc", ".gitignore")
+            self.assertTrue(os.path.isfile(target), msg=f"expected file at {target}")
+        self.assertEqual(state.get("status"), "completed", msg=str(state.get("errors", [])))
+
+    def test_verify_target_does_not_require_mutation(self) -> None:
+        graph = DevMasterGraph()
+        plan = self._sample_plan()
+        plan["target_files"] = [
+            {
+                "file_name": "README.md",
+                "expected_path_hint": "projects/calc/README.md",
+                "modification_type": "verify",
+                "details": "verify file exists",
+                "creation_policy": "must_exist",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "calc"), exist_ok=True)
+            with open(os.path.join(tmp, "calc", "README.md"), "w", encoding="utf-8") as fh:
+                fh.write("hello")
+            state = graph.run(
+                request_id="verify-target-1",
+                plan=plan,
+                scope_root=tmp,
+                ask_user=lambda _: "n/a",
+            )
+        self.assertEqual(state.get("status"), "completed", msg=str(state.get("errors", [])))
+
+    def test_post_handoff_reindex_event_emitted(self) -> None:
+        graph = DevMasterGraph()
+        plan = self._sample_plan()
+        with tempfile.TemporaryDirectory() as tmp:
+            state = graph.run(
+                request_id="handoff-index-1",
+                plan=plan,
+                scope_root=tmp,
+                ask_user=lambda _: "n/a",
+            )
+        categories = [str(event.get("category", "")) for event in state.get("telemetry_events", []) if isinstance(event, dict)]
+        self.assertIn("post_handoff_index_refresh", categories, msg=str(categories))
+
 
 if __name__ == "__main__":
     unittest.main()

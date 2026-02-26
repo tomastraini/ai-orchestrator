@@ -35,6 +35,7 @@ ALLOWED_TARGET_FILE_KEYS = {
     "expected_path_hint",
     "modification_type",
     "details",
+    "creation_policy",
 }
 ALLOWED_PROJECT_REF_KEYS = {"name", "path_hint"}
 ALLOWED_STACK_KEYS = {"frontend", "backend", "language_preferences"}
@@ -193,6 +194,7 @@ def validate_plan_json(plan: Any, requirement: Optional[str] = None) -> Tuple[bo
     if not isinstance(target_files, list):
         errors.append("Field 'target_files' must be an array.")
     else:
+        allowed_creation_policies = {"must_exist", "create_if_missing"}
         for i, tf in enumerate(target_files):
             if not isinstance(tf, dict):
                 errors.append(f"target_files[{i}] must be an object.")
@@ -204,6 +206,14 @@ def validate_plan_json(plan: Any, requirement: Optional[str] = None) -> Tuple[bo
             for k in ["file_name", "expected_path_hint", "modification_type", "details"]:
                 if not _is_non_empty_str(tf.get(k)):
                     errors.append(f"target_files[{i}].{k} must be a non-empty string.")
+            creation_policy = tf.get("creation_policy")
+            if creation_policy is not None and not _is_non_empty_str(creation_policy):
+                errors.append(f"target_files[{i}].creation_policy must be a non-empty string when provided.")
+            if _is_non_empty_str(creation_policy) and str(creation_policy) not in allowed_creation_policies:
+                errors.append(
+                    f"target_files[{i}].creation_policy must be one of: "
+                    f"{', '.join(sorted(allowed_creation_policies))}."
+                )
             if (
                 project_mode == "new_project"
                 and _is_non_empty_str(tf.get("expected_path_hint"))

@@ -59,6 +59,7 @@ class DevMasterGraph:
         "composer.json",
     )
     SOURCE_DIR_HINTS = ("src", "app", "lib")
+    INDEX_IGNORE_DIRS = {"node_modules", ".git", ".venv", "__pycache__", "dist", "build", ".next", ".cache"}
 
     def __init__(self) -> None:
         graph = StateGraph(DevGraphState)
@@ -151,6 +152,7 @@ class DevMasterGraph:
             "implementation_pass_statuses": [],
             "log_sink": log_sink,
             "root_resolution_evidence": {},
+            "active_root_file_index": {},
             "llm_context_contract": {},
         }
         result = self._compiled_graph.invoke(initial_state)
@@ -524,6 +526,7 @@ class DevMasterGraph:
                     "path_hint": str(target.get("expected_path_hint", "")),
                     "file_name": str(target.get("file_name", "")),
                     "change_type": str(target.get("modification_type", "modify")),
+                    "creation_policy": str(target.get("creation_policy", "")),
                     "rationale": str(target.get("details", "")),
                 }
             )
@@ -746,6 +749,7 @@ class DevMasterGraph:
                 continue
             expected = str(target.get("expected_path_hint", ""))
             file_name = str(target.get("file_name", ""))
+            creation_policy = str(target.get("creation_policy", ""))
             resolved = ""
             try:
                 resolved = DevMasterGraph._resolve_target_file_path(
@@ -761,6 +765,7 @@ class DevMasterGraph:
                 {
                     "expected_path_hint": expected,
                     "file_name": file_name,
+                    "creation_policy": creation_policy,
                     "resolved_absolute_path": resolved,
                 }
             )
@@ -786,6 +791,119 @@ class DevMasterGraph:
             "normalized_targets": normalized_targets,
             "active_root_tree_snapshot": tree_snapshot,
         }
+
+    @staticmethod
+    def _build_active_root_file_index(active_root: str) -> Dict[str, Any]:
+        files: List[str] = []
+        by_basename: Dict[str, List[str]] = {}
+        by_basename_casefold: Dict[str, List[str]] = {}
+        by_suffix_casefold: Dict[str, str] = {}
+        if not active_root or not os.path.isdir(active_root):
+            return {
+                "active_root": active_root,
+                "files": files,
+                "by_basename": by_basename,
+                "by_basename_casefold": by_basename_casefold,
+                "by_suffix_casefold": by_suffix_casefold,
+            }
+        for root, dirs, names in os.walk(active_root):
+            dirs[:] = [d for d in dirs if d not in DevMasterGraph.INDEX_IGNORE_DIRS]
+            for name in names:
+                abs_path = os.path.join(root, name)
+                rel = os.path.relpath(abs_path, active_root).replace("\\", "/")
+                files.append(rel)
+                base = os.path.basename(rel)
+                by_basename.setdefault(base, []).append(rel)
+                by_basename_casefold.setdefault(base.casefold(), []).append(rel)
+                suffixes = rel.split("/")
+                for idx in range(len(suffixes)):
+                    suffix = "/".join(suffixes[idx:]).casefold()
+                    if suffix and suffix not in by_suffix_casefold:
+                        by_suffix_casefold[suffix] = rel
+        return {
+            "active_root": active_root,
+            "files": files,
+            "by_basename": by_basename,
+            "by_basename_casefold": by_basename_casefold,
+            "by_suffix_casefold": by_suffix_casefold,
+        }
+
+    @staticmethod
+    def _emit_index_snapshot(state: DevGraphState, index: Dict[str, Any], category: str) -> None:
+        files = index.get("files", []) if isinstance(index.get("files"), list) else []
+        preview = sorted(files)[:30]
+        DevMasterGraph._emit_event(
+            state,
+            category,
+            active_root=DevMasterGraph._relpath_safe(state, str(index.get("active_root", ""))),
+            file_count=len(files),
+            top_entries=preview,
+        )
+
+    @staticmethod
+    def _refresh_active_root_index(state: DevGraphState, *, category: str) -> Dict[str, Any]:
+        active_root = str(state.get("active_project_root", "")).strip()
+        if not active_root:
+            project_root = str(state.get("project_root", "")).strip()
+            scope_root = str(state.get("scope_root", "")).strip()
+            rel = project_root.split("/", 1)[1] if project_root.startswith("projects/") else project_root
+            active_root = os.path.join(scope_root, rel) if scope_root else active_root
+            state["active_project_root"] = active_root
+        index = DevMasterGraph._build_active_root_file_index(active_root)
+        state["active_root_file_index"] = index
+        DevMasterGraph._emit_index_snapshot(state, index, category)
+        return index
+
+    @staticmethod
+    def _normalize_expected_suffix_for_active_root(expected_path_hint: str, active_root: str, project_root: str) -> str:
+        expected = str(expected_path_hint or "").replace("\\", "/").strip().lstrip("./")
+        if not expected:
+            return ""
+        parts = [p for p in expected.split("/") if p]
+        if expected.startswith("projects/") and len(parts) >= 3:
+            parts = parts[2:]
+        active_parts = [p for p in str(active_root or "").replace("\\", "/").split("/") if p]
+        project_parts = [p for p in str(project_root or "").replace("\\", "/").split("/") if p]
+        if len(active_parts) >= 1 and len(project_parts) >= 1:
+            if active_parts[-1].casefold() == project_parts[-1].casefold():
+                pass
+        # Deduplicate active root tail from expected suffix, e.g. active_root=.../frontend and suffix starts frontend/
+        if active_parts:
+            tail = active_parts[-1].casefold()
+            if parts and parts[0].casefold() == tail:
+                parts = parts[1:]
+        return "/".join(parts)
+
+    @staticmethod
+    def _choose_best_index_candidate(
+        *,
+        index: Dict[str, Any],
+        expected_suffix: str,
+        file_name: str,
+    ) -> str:
+        suffix_map = index.get("by_suffix_casefold", {}) if isinstance(index.get("by_suffix_casefold"), dict) else {}
+        by_basename = index.get("by_basename_casefold", {}) if isinstance(index.get("by_basename_casefold"), dict) else {}
+        expected_low = expected_suffix.casefold().strip("/")
+        if expected_low and expected_low in suffix_map:
+            return str(suffix_map[expected_low])
+        leaf = os.path.basename(str(file_name or "").replace("\\", "/")).strip()
+        if leaf:
+            candidates = by_basename.get(leaf.casefold(), [])
+            if isinstance(candidates, list) and candidates:
+                if expected_low:
+                    scored: List[Tuple[int, str]] = []
+                    expected_parts = [p for p in expected_low.split("/") if p]
+                    for rel in candidates:
+                        rel_low = str(rel).casefold()
+                        score = 0
+                        for part in expected_parts[:-1]:
+                            if f"/{part}/" in f"/{rel_low}/":
+                                score += 1
+                        scored.append((score, rel))
+                    scored.sort(key=lambda x: x[0], reverse=True)
+                    return str(scored[0][1])
+                return str(candidates[0])
+        return ""
 
     @staticmethod
     def _file_sha1(path: str) -> str:
@@ -833,33 +951,53 @@ class DevMasterGraph:
             DevMasterGraph._emit(state, "[BOOTSTRAP] no pending bootstrap checklist items")
             return state
 
-        logs, touched_paths, errors, attempt_history, pending_llm_task, outcomes = execute_dev_tasks(
-            bootstrap_tasks,
-            scope_root=state["scope_root"],
-            max_retries=int(state.get("max_retries", 5)),
-            reserve_last_for_llm=True,
-            log_sink=state.get("log_sink"),
-            ask_confirmation=(lambda q: bool(state.get("ask_user")(q).strip().lower() in {"y", "yes", "true", "1"})) if callable(state.get("ask_user")) else None,
-            ask_runtime_prompt=(lambda q: state.get("ask_user")(f"[DEV RUNTIME PROMPT] {q} (y/N)")) if callable(state.get("ask_user")) else None,
-            stack_hint=(state.get("detected_stacks") or ["generic"])[0],
-            interactive_prompt_timeout_seconds=60.0,
-            constraints=plan_constraints,
-            command_run_mode="auto",
-            event_sink=(lambda event: DevMasterGraph._emit_event(state, "executor_event", **event)),
-        )
-        state["logs"].extend(logs)
-        state["touched_paths"].extend(touched_paths)
-        state["attempt_history"].extend(attempt_history)
-        state["task_outcomes"].extend(outcomes)
-        state["retry_count"] = len(state.get("attempt_history", []))
-        for outcome in outcomes:
-            checklist_id = f"todo_{outcome.get('task_id', '')}"
-            status = "completed" if outcome.get("status") == "completed" else "blocked"
-            DevMasterGraph._set_checklist_status(state, checklist_id, status, evidence=outcome)
+        pending_llm_task = None
+        errors: List[str] = []
+        for task in bootstrap_tasks:
+            logs, touched_paths, task_errors, attempt_history, task_pending_llm, outcomes = execute_dev_tasks(
+                [task],
+                scope_root=state["scope_root"],
+                max_retries=int(state.get("max_retries", 5)),
+                reserve_last_for_llm=True,
+                log_sink=state.get("log_sink"),
+                ask_confirmation=(lambda q: bool(state.get("ask_user")(q).strip().lower() in {"y", "yes", "true", "1"})) if callable(state.get("ask_user")) else None,
+                ask_runtime_prompt=(lambda q: state.get("ask_user")(f"[DEV RUNTIME PROMPT] {q} (y/N)")) if callable(state.get("ask_user")) else None,
+                stack_hint=(state.get("detected_stacks") or ["generic"])[0],
+                interactive_prompt_timeout_seconds=60.0,
+                constraints=plan_constraints,
+                command_run_mode="auto",
+                event_sink=(lambda event: DevMasterGraph._emit_event(state, "executor_event", **event)),
+            )
+            state["logs"].extend(logs)
+            state["touched_paths"].extend(touched_paths)
+            state["attempt_history"].extend(attempt_history)
+            state["task_outcomes"].extend(outcomes)
+            state["retry_count"] = len(state.get("attempt_history", []))
+            for outcome in outcomes:
+                checklist_id = f"todo_{outcome.get('task_id', '')}"
+                status = "completed" if outcome.get("status") == "completed" else "blocked"
+                DevMasterGraph._set_checklist_status(state, checklist_id, status, evidence=outcome)
+            # Mandatory per-handoff re-scan/re-index.
+            root_evidence = DevMasterGraph._resolve_active_project_root_after_bootstrap(
+                state=state,
+                attempt_history=state.get("attempt_history", []),
+            )
+            state["root_resolution_evidence"] = root_evidence
+            selected_root = str(root_evidence.get("selected_root", "")).strip()
+            if selected_root:
+                state["active_project_root"] = selected_root
+            DevMasterGraph._refresh_active_root_index(state, category="post_handoff_index_refresh")
+            if task_errors:
+                errors.extend(task_errors)
+                pending_llm_task = task_pending_llm
+                break
+            if task_pending_llm is not None:
+                pending_llm_task = task_pending_llm
+                break
         if errors:
             timed_out_long_running = [
                 attempt
-                for attempt in attempt_history
+                for attempt in state.get("attempt_history", [])
                 if str(attempt.get("category", "")) == "timeout"
                 and DevMasterGraph._is_long_running_validation_command(str(attempt.get("command", "")))
             ]
@@ -938,7 +1076,7 @@ class DevMasterGraph:
             state["bootstrap_status"] = "completed"
             DevMasterGraph._emit(
                 state,
-                f"[PHASE_SUMMARY] bootstrap attempts={len(attempt_history)} recovered=deterministic_or_clean"
+                f"[PHASE_SUMMARY] bootstrap attempts={len(state.get('attempt_history', []))} recovered=deterministic_or_clean"
             )
             state["phase_status"]["execute_bootstrap_phase"] = "completed"
             return state
@@ -1091,8 +1229,12 @@ class DevMasterGraph:
         file_name: str,
     ) -> str:
         scope_abs = os.path.abspath(os.path.normpath(scope_root))
-        expected_norm = (expected_path_hint or "").replace("\\", "/").strip().lstrip("./")
-        project_root_norm = (project_root or "").replace("\\", "/").strip().lstrip("./")
+        expected_norm = (expected_path_hint or "").replace("\\", "/").strip()
+        while expected_norm.startswith("./"):
+            expected_norm = expected_norm[2:]
+        project_root_norm = (project_root or "").replace("\\", "/").strip()
+        while project_root_norm.startswith("./"):
+            project_root_norm = project_root_norm[2:]
         file_name_norm = (file_name or "").strip()
 
         project_name = ""
@@ -1111,7 +1253,9 @@ class DevMasterGraph:
             rel = project_root_norm.split("/", 1)[1] if project_root_norm.startswith("projects/") else project_root_norm
             base_root = os.path.abspath(os.path.join(scope_abs, rel))
 
-        file_name_norm = file_name_norm.replace("\\", "/").strip().lstrip("./")
+        file_name_norm = file_name_norm.replace("\\", "/").strip()
+        while file_name_norm.startswith("./"):
+            file_name_norm = file_name_norm[2:]
         file_leaf = os.path.basename(file_name_norm) if file_name_norm else ""
         rel_path = expected_norm
         if expected_norm.startswith("projects/"):
@@ -1138,50 +1282,59 @@ class DevMasterGraph:
             if not rel_parts or rel_parts[-1] != file_leaf:
                 rel_path = "/".join(rel_parts + [file_leaf]) if rel_parts else file_leaf
 
+        # If active root already points to a nested app root (frontend/backend/src),
+        # remove duplicated leading segments from expected relative path.
+        active_tail = os.path.basename(base_root.rstrip("/\\")).casefold()
+        rel_parts = [p for p in rel_path.replace("\\", "/").split("/") if p]
+        if active_tail and rel_parts and rel_parts[0].casefold() == active_tail:
+            rel_path = "/".join(rel_parts[1:])
+
         safe_path = os.path.abspath(os.path.join(base_root, rel_path))
         if os.path.commonpath([scope_abs, safe_path]) != scope_abs:
             raise RuntimeError(f"Implementation target escapes scope: {expected_path_hint}")
         return safe_path
 
     @staticmethod
-    def _discover_existing_path(active_root: str, expected_path_hint: str, file_name: str) -> str:
-        expected_norm = expected_path_hint.replace("\\", "/").strip().lstrip("./")
-        targets = [name for name in {file_name.strip(), os.path.basename(expected_norm)} if name]
-        expected_suffix = ""
-        if expected_norm.startswith("projects/"):
-            parts = [p for p in expected_norm.split("/") if p]
-            if len(parts) >= 3:
-                expected_suffix = "/".join(parts[2:])
-        else:
-            expected_suffix = expected_norm
+    def _discover_existing_path(
+        active_root: str,
+        expected_path_hint: str,
+        file_name: str,
+        *,
+        project_root: str = "",
+        file_index: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        if not active_root or not os.path.isdir(active_root):
+            return ""
+        index = file_index or DevMasterGraph._build_active_root_file_index(active_root)
+        expected_suffix = DevMasterGraph._normalize_expected_suffix_for_active_root(
+            expected_path_hint,
+            active_root,
+            project_root,
+        )
+        rel = DevMasterGraph._choose_best_index_candidate(
+            index=index,
+            expected_suffix=expected_suffix,
+            file_name=file_name,
+        )
+        if not rel:
+            return ""
+        return os.path.join(active_root, rel)
 
-        best_candidate = ""
-        best_score = -1
-        for root, dirs, files in os.walk(active_root):
-            dirs[:] = [
-                d for d in dirs if d not in {"node_modules", ".git", ".venv", "__pycache__", "dist", "build", ".next"}
-            ]
-            for name in files:
-                if name not in targets:
-                    continue
-                candidate = os.path.join(root, name)
-                normalized = candidate.replace("\\", "/")
-                if expected_suffix and normalized.endswith(expected_suffix):
-                    return candidate
-                score = 0
-                if expected_suffix:
-                    exp_dirs = expected_suffix.split("/")[:-1]
-                    rel = os.path.relpath(candidate, active_root).replace("\\", "/")
-                    rel_dirs = rel.split("/")[:-1]
-                    for i, part in enumerate(exp_dirs):
-                        if i < len(rel_dirs) and rel_dirs[i] == part:
-                            score += 1
-                else:
-                    score = 100 - len(os.path.relpath(candidate, active_root).split(os.sep))
-                if score > best_score:
-                    best_candidate = candidate
-                    best_score = score
-        return best_candidate
+    @staticmethod
+    def _extract_error_file_refs(attempt_history: List[Dict[str, Any]]) -> List[str]:
+        refs: List[str] = []
+        patterns = [
+            re.compile(r"([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+):\d+:\d+"),
+            re.compile(r"File \"([^\"]+)\""),
+        ]
+        for attempt in attempt_history:
+            blob = f"{attempt.get('stdout', '')}\n{attempt.get('stderr', '')}"
+            for pattern in patterns:
+                for match in pattern.finditer(blob):
+                    candidate = match.group(1).replace("\\", "/").strip()
+                    if candidate and candidate not in refs:
+                        refs.append(candidate)
+        return refs[:40]
 
     @staticmethod
     def _comment_for_path(path: str, text: str) -> str:
@@ -1275,17 +1428,29 @@ class DevMasterGraph:
         details: str,
         pass_index: int,
         expected_path_hint: str,
+        creation_policy: str,
+        file_index: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, str, str]:
         if modification_type in {"create_directory", "mkdir", "create_dir"}:
             os.makedirs(safe_target, exist_ok=True)
             return "ensured_directory", f"pass={pass_index}", safe_target
 
+        def _looks_like_file_target(path: str, file_hint: str) -> bool:
+            hint_leaf = os.path.basename(str(file_hint or "").replace("\\", "/")).strip()
+            path_leaf = os.path.basename(str(path or "").replace("\\", "/")).strip()
+            if hint_leaf.startswith(".") or path_leaf.startswith("."):
+                return True
+            if os.path.splitext(hint_leaf)[1]:
+                return True
+            if os.path.splitext(path_leaf)[1]:
+                return True
+            return False
+
         is_directory_target = modification_type in {"create_directory", "mkdir", "create_dir"}
-        if not is_directory_target and os.path.splitext(file_name)[1]:
+        if not is_directory_target and _looks_like_file_target(safe_target, file_name):
             is_directory_target = False
-        elif os.path.splitext(safe_target)[1] == "":
-            # Keep legacy behavior only for explicit directory targets or extensionless names.
-            is_directory_target = True
+        elif not is_directory_target:
+            is_directory_target = False
 
         if is_directory_target:
             os.makedirs(safe_target, exist_ok=True)
@@ -1295,14 +1460,33 @@ class DevMasterGraph:
         if os.path.isdir(safe_target):
             return "path_type_mismatch", "target_is_directory", safe_target
         update_like = modification_type in {"update", "replace", "modify", "patch"}
+        verify_like = modification_type in {"verify", "inspect", "check"}
+        must_exist = str(creation_policy or "").strip().lower() == "must_exist" or update_like or verify_like
         if update_like and not os.path.exists(safe_target):
-            discovered = DevMasterGraph._discover_existing_path(active_root, expected_path_hint, file_name)
+            discovered = DevMasterGraph._discover_existing_path(
+                active_root,
+                expected_path_hint,
+                file_name,
+                project_root=str(state.get("project_root", "")),
+                file_index=file_index,
+            )
             if discovered:
                 safe_target = discovered
             else:
                 return "missing_expected_file", "requires_discovery_or_clarification", safe_target
+        if verify_like and not os.path.exists(safe_target):
+            discovered = DevMasterGraph._discover_existing_path(
+                active_root,
+                expected_path_hint,
+                file_name,
+                project_root=str(state.get("project_root", "")),
+                file_index=file_index,
+            )
+            if discovered:
+                return "observed_file", "verify_discovered_target", discovered
+            return "missing_expected_file", "verify_missing_target", safe_target
         if not os.path.exists(safe_target):
-            if update_like:
+            if must_exist:
                 return "missing_expected_file", "not_created_due_to_update_policy", safe_target
             with open(safe_target, "w", encoding="utf-8") as fh:
                 fh.write(
@@ -1327,6 +1511,13 @@ class DevMasterGraph:
         )
 
         if new_content != original:
+            low_signal = new_content.strip().casefold() in {
+                original.strip().casefold(),
+                f"// {details}".strip().casefold(),
+                f"# {details}".strip().casefold(),
+            }
+            if low_signal:
+                return "low_signal_update_rejected", "comment_or_noop_like_update", safe_target
             with open(safe_target, "w", encoding="utf-8") as fh:
                 fh.write(new_content)
             return "updated_file", "generated_update", safe_target
@@ -1385,6 +1576,7 @@ class DevMasterGraph:
             active_root = os.path.join(scope_root, rel)
         state["llm_context_contract"] = DevMasterGraph._build_llm_context_contract(state)
         DevMasterGraph._emit(state, f"[CONTEXT] active_root={active_root}")
+        DevMasterGraph._refresh_active_root_index(state, category="implementation_index_refresh")
         targets = state.get("implementation_targets", [])
         pending_targets: List[Tuple[int, Dict[str, str]]] = []
         target_proofs: Dict[str, Dict[str, Any]] = {}
@@ -1418,9 +1610,16 @@ class DevMasterGraph:
                 for idx, target in pending_targets:
                     expected = str(target.get("expected_path_hint", ""))
                     modification_type = str(target.get("modification_type", "")).lower()
+                    creation_policy = str(target.get("creation_policy", "")).strip().lower() or (
+                        "must_exist" if modification_type in {"update", "replace", "modify", "patch", "verify"} else "create_if_missing"
+                    )
                     details = str(target.get("details", "")).strip()
                     raw_file_name = str(target.get("file_name", "")).strip()
                     file_name = os.path.basename(raw_file_name.replace("\\", "/")) if raw_file_name else os.path.basename(expected)
+                    file_index = DevMasterGraph._refresh_active_root_index(
+                        state,
+                        category="implementation_index_refresh",
+                    )
                     safe_target = DevMasterGraph._resolve_target_file_path(
                         scope_root=scope_root,
                         project_root=project_root,
@@ -1428,7 +1627,7 @@ class DevMasterGraph:
                         expected_path_hint=expected,
                         file_name=file_name,
                     )
-                    key = str(expected or file_name or safe_target)
+                    key = f"todo_impl_{idx}"
                     if key not in target_proofs:
                         target_proofs[key] = {"before_hash": DevMasterGraph._file_sha1(safe_target), "after_hash": ""}
                     before_text = ""
@@ -1447,6 +1646,8 @@ class DevMasterGraph:
                         details=details,
                         pass_index=pass_index,
                         expected_path_hint=expected,
+                        creation_policy=creation_policy,
+                        file_index=file_index,
                     )
                     if action == "path_type_mismatch":
                         recovered_target = os.path.join(resolved_target, file_name) if file_name else resolved_target
@@ -1464,9 +1665,17 @@ class DevMasterGraph:
                             details=details,
                             pass_index=pass_index,
                             expected_path_hint=expected,
+                            creation_policy=creation_policy,
+                            file_index=file_index,
                         )
                     if action == "missing_expected_file":
-                        discovered = DevMasterGraph._discover_existing_path(active_root, expected, file_name)
+                        discovered = DevMasterGraph._discover_existing_path(
+                            active_root,
+                            expected,
+                            file_name,
+                            project_root=project_root,
+                            file_index=file_index,
+                        )
                         if not discovered:
                             raise RuntimeError(f"Expected target missing and discovery failed: {expected}")
                         DevMasterGraph._emit(
@@ -1483,9 +1692,13 @@ class DevMasterGraph:
                             details=details,
                             pass_index=pass_index,
                             expected_path_hint=expected,
+                            creation_policy=creation_policy,
+                            file_index=file_index,
                         )
                         if action == "missing_expected_file":
                             raise RuntimeError(f"Expected target missing and discovery failed: {expected}")
+                    if action == "low_signal_update_rejected":
+                        raise RuntimeError(f"Low-signal update rejected for {resolved_target}")
                     target_proofs[key]["after_hash"] = DevMasterGraph._file_sha1(resolved_target)
                     state["touched_paths"].append(resolved_target)
                     after_text = ""
@@ -1525,10 +1738,19 @@ class DevMasterGraph:
                     f"[PASS_SUMMARY] {pass_label} actions={pass_actions} touched_total={len(state.get('touched_paths', []))}"
                 )
             for idx, target in pending_targets:
-                key = str(target.get("expected_path_hint", "") or target.get("file_name", ""))
+                key = f"todo_impl_{idx}"
                 proof = target_proofs.get(key, {})
                 before_hash = str(proof.get("before_hash", ""))
                 after_hash = str(proof.get("after_hash", ""))
+                mod_type = str(target.get("modification_type", "")).strip().lower()
+                if mod_type in {"verify", "inspect", "check"}:
+                    DevMasterGraph._set_checklist_status(
+                        state,
+                        f"todo_impl_{idx}",
+                        "completed",
+                        evidence={"phase": "implementation", "mode": "verify", "target": key},
+                    )
+                    continue
                 if before_hash == after_hash:
                     raise RuntimeError(
                         f"Target mutation proof missing for {key or f'implementation_target_{idx}'}: no content delta detected."
@@ -1670,6 +1892,13 @@ class DevMasterGraph:
         state["touched_paths"].extend(touched_paths)
         state["attempt_history"].extend(attempt_history)
         state["task_outcomes"].extend(outcomes)
+        error_file_refs = DevMasterGraph._extract_error_file_refs(attempt_history)
+        if error_file_refs:
+            DevMasterGraph._emit_event(
+                state,
+                "validation_error_file_refs",
+                refs=error_file_refs,
+            )
         for outcome in outcomes:
             checklist_id = f"todo_{outcome.get('task_id', '')}"
             status = "completed" if outcome.get("status") == "completed" else "failed"
@@ -1678,6 +1907,11 @@ class DevMasterGraph:
             state["errors"].append(f"[VALIDATION] pending llm recovery unsupported for validation: {pending.get('task_id')}")
         if errors or pending:
             state["errors"].extend(errors)
+            if error_file_refs:
+                state["errors"].append(
+                    "[RECOVERABLE_CONTEXT_GAP] validation failed with file-level diagnostics; "
+                    f"targeted fix candidates={error_file_refs[:8]}"
+                )
             state["validation_status"] = "failed"
             state["status"] = "implementation_failed"
             state["phase_status"]["execute_validation_phase"] = "failed"

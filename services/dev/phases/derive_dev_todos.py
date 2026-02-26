@@ -62,6 +62,7 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
                 "expected_path_hint": str(target.get("expected_path_hint", "")),
                 "modification_type": str(target.get("modification_type", "")),
                 "details": str(target.get("details", "")),
+                "creation_policy": str(target.get("creation_policy", "")),
             }
         )
 

@@ -170,6 +170,25 @@ def _normalize_bootstrap_commands(plan: Dict[str, Any]) -> Dict[str, Any]:
     return plan
 
 
+def _normalize_target_file_policies(plan: Dict[str, Any]) -> Dict[str, Any]:
+    targets = plan.get("target_files")
+    if not isinstance(targets, list):
+        return plan
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        raw_mod = str(target.get("modification_type", "")).strip().lower()
+        raw_policy = str(target.get("creation_policy", "")).strip().lower()
+        if raw_policy in {"must_exist", "create_if_missing"}:
+            target["creation_policy"] = raw_policy
+            continue
+        if raw_mod in {"update", "modify", "patch", "replace", "verify"}:
+            target["creation_policy"] = "must_exist"
+        else:
+            target["creation_policy"] = "create_if_missing"
+    return plan
+
+
 def _extract_output_text(response: Any) -> str:
     content = None
     for item in response.output:
@@ -241,7 +260,7 @@ Wrapper format:
       "database_required": "yes|no"
     }},
     "bootstrap_commands": [{{"cwd": "string", "command": "string", "purpose": "string"}}],
-    "target_files": [{{"file_name": "string", "expected_path_hint": "string", "modification_type": "string", "details": "string"}}],
+    "target_files": [{{"file_name": "string", "expected_path_hint": "string", "modification_type": "string", "details": "string", "creation_policy": "must_exist|create_if_missing"}}],
     "constraints": ["string"],
     "validation": ["string"],
     "clarification_summary": ["string"],
@@ -475,6 +494,7 @@ def create_plan(
         plan = _normalize_new_project_plan(plan, checklist)
         plan = _normalize_existing_project_plan(plan, preselected_project_ref)
         plan = _normalize_bootstrap_commands(plan)
+        plan = _normalize_target_file_policies(plan)
         ok, errors = validate_plan_json(plan, requirement=requirement)
         if not ok:
             raise PMServiceError(

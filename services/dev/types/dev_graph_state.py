@@ -40,6 +40,7 @@ class DevGraphState(TypedDict, total=False):
     log_sink: Any
     validation_status: str
     root_resolution_evidence: Dict[str, Any]
+    active_root_file_index: Dict[str, Any]
     llm_context_contract: Dict[str, Any]
     internal_checklist: List[Dict[str, Any]]
     checklist_index: Dict[str, int]
