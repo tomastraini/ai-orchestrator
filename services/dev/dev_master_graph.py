@@ -24,7 +24,7 @@ from services.dev.phases.finalize_result import run as finalize_result_phase
 from services.dev.phases.ingest_pm_plan import run as ingest_pm_plan_phase
 from services.dev.phases.prepare_execution_steps import run as prepare_execution_steps_phase
 from services.dev.types.dev_graph_state import DevGraphState
-from services.workspace.project_index import detect_stack_from_markers
+from services.workspace.project_index import detect_stack_from_markers, rank_candidate_files, scan_workspace_context
 from shared.dev_schemas import DevChecklistItem, DevTask, derive_project_name
 
 
@@ -130,6 +130,9 @@ class DevMasterGraph:
             "checklist_index": {},
             "task_outcomes": [],
             "telemetry_events": [],
+            "dev_discovery_candidates": [],
+            "dev_technical_plan": {},
+            "dev_plan_approved": False,
             "checklist_cursor": "",
             "llm_calls_used": 0,
             "llm_call_budget": max(0, int(max_model_calls_per_run)),
@@ -486,6 +489,86 @@ class DevMasterGraph:
         return prepare_execution_steps_phase(state, DevMasterGraph)
 
     @staticmethod
+    def _compute_discovery_candidates(state: DevGraphState) -> List[Dict[str, Any]]:
+        repo_root = os.path.dirname(str(state.get("scope_root", "")).rstrip(os.sep))
+        requirement_text = " ".join(
+            [
+                str(state.get("plan", {}).get("summary", "")),
+                " ".join([str(x) for x in state.get("plan", {}).get("constraints", []) if isinstance(x, str)]),
+                " ".join([str(x) for x in state.get("plan", {}).get("validation", []) if isinstance(x, str)]),
+            ]
+        ).strip()
+        ctx = scan_workspace_context(repo_root, file_limit=600)
+        ranked = rank_candidate_files(requirement_text, ctx.get("sampled_files", []), top_k=80)
+        state["dev_discovery_candidates"] = ranked
+        DevMasterGraph._emit_event(
+            state,
+            "dev_discovery_ranked",
+            requirement_excerpt=DevMasterGraph._sanitize_text(requirement_text, 300),
+            candidate_count=len(ranked),
+            top_candidates=ranked[:15],
+        )
+        return ranked
+
+    @staticmethod
+    def _build_dev_technical_plan(state: DevGraphState) -> Dict[str, Any]:
+        targets = state.get("implementation_targets", [])
+        steps = state.get("bootstrap_tasks", [])
+        validations = state.get("validation_tasks", [])
+        affected_files: List[Dict[str, Any]] = []
+        for target in targets:
+            if not isinstance(target, dict):
+                continue
+            affected_files.append(
+                {
+                    "path_hint": str(target.get("expected_path_hint", "")),
+                    "file_name": str(target.get("file_name", "")),
+                    "change_type": str(target.get("modification_type", "modify")),
+                    "rationale": str(target.get("details", "")),
+                }
+            )
+        todos: List[Dict[str, Any]] = []
+        for idx, target in enumerate(affected_files, start=1):
+            todos.append(
+                {
+                    "id": f"dev_todo_{idx}",
+                    "description": f"{target['change_type']} {target['path_hint'] or target['file_name']}".strip(),
+                    "acceptance_criteria": [
+                        "File change is applied and syntactically valid",
+                        "Change aligns with PM acceptance criteria and constraints",
+                    ],
+                }
+            )
+        command_plan = [
+            {"cwd": str(task.cwd or "."), "command": str(task.command or ""), "purpose": str(task.description)}
+            for task in steps
+            if isinstance(task, DevTask)
+        ]
+        validation_plan = [
+            {"id": str(task.id), "description": str(task.description), "command": str(task.command or "")}
+            for task in validations
+            if isinstance(task, DevTask)
+        ]
+        technical_plan = {
+            "project_root": str(state.get("project_root", "")),
+            "affected_files": affected_files,
+            "command_plan": command_plan,
+            "todo_plan": todos,
+            "validation_plan": validation_plan,
+            "discovery_candidates": state.get("dev_discovery_candidates", [])[:20],
+        }
+        state["dev_technical_plan"] = technical_plan
+        DevMasterGraph._emit_event(
+            state,
+            "dev_technical_plan_built",
+            affected_files=affected_files,
+            command_count=len(command_plan),
+            todo_count=len(todos),
+            validation_count=len(validation_plan),
+        )
+        return technical_plan
+
+    @staticmethod
     def _is_within_scope(scope_root: str, candidate_path: str) -> bool:
         try:
             scope_abs = os.path.abspath(scope_root)
@@ -716,6 +799,11 @@ class DevMasterGraph:
         state["current_step"] = "execute_bootstrap_phase"
         DevMasterGraph._emit(state, "[PHASE_START] execute_bootstrap_phase")
         DevMasterGraph._emit(state, "[PHASE] bootstrap")
+        if state.get("phase_status", {}).get("prepare_execution_steps") == "failed":
+            state["bootstrap_status"] = "failed"
+            state["phase_status"]["execute_bootstrap_phase"] = "skipped"
+            DevMasterGraph._emit(state, "[BOOTSTRAP] skipped because prepare_execution_steps failed")
+            return state
         next_item = DevMasterGraph._next_actionable_checklist_item(state)
         if next_item:
             DevMasterGraph._emit(
@@ -757,6 +845,7 @@ class DevMasterGraph:
             interactive_prompt_timeout_seconds=60.0,
             constraints=plan_constraints,
             command_run_mode="auto",
+            event_sink=(lambda event: DevMasterGraph._emit_event(state, "executor_event", **event)),
         )
         state["logs"].extend(logs)
         state["touched_paths"].extend(touched_paths)
@@ -1112,84 +1201,73 @@ class DevMasterGraph:
         return cleaned[0].upper() + cleaned[1:]
 
     @staticmethod
-    def _render_calculator_component(component_name: str) -> str:
-        return (
-            "import { useMemo, useState } from 'react';\n\n"
-            f"export default function {component_name}() {{\n"
-            "  const [left, setLeft] = useState<string>('0');\n"
-            "  const [right, setRight] = useState<string>('0');\n"
-            "  const [operation, setOperation] = useState<'add' | 'subtract'>('add');\n\n"
-            "  const result = useMemo(() => {\n"
-            "    const a = Number(left);\n"
-            "    const b = Number(right);\n"
-            "    if (Number.isNaN(a) || Number.isNaN(b)) return 'Invalid input';\n"
-            "    return operation === 'add' ? String(a + b) : String(a - b);\n"
-            "  }, [left, right, operation]);\n\n"
-            "  return (\n"
-            "    <main style={{ fontFamily: 'Arial, sans-serif', margin: '2rem auto', maxWidth: 420 }}>\n"
-            f"      <h1>{component_name}</h1>\n"
-            "      <label>\n"
-            "        First number\n"
-            "        <input type=\"number\" value={left} onChange={(e) => setLeft(e.target.value)} />\n"
-            "      </label>\n"
-            "      <label style={{ display: 'block', marginTop: 12 }}>\n"
-            "        Second number\n"
-            "        <input type=\"number\" value={right} onChange={(e) => setRight(e.target.value)} />\n"
-            "      </label>\n"
-            "      <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>\n"
-            "        <button type=\"button\" onClick={() => setOperation('add')}>Add</button>\n"
-            "        <button type=\"button\" onClick={() => setOperation('subtract')}>Subtract</button>\n"
-            "      </div>\n"
-            "      <p style={{ marginTop: 16 }}><strong>Result:</strong> {result}</p>\n"
-            "    </main>\n"
-            "  );\n"
-            "}\n"
-        )
-
-    @staticmethod
-    def _render_react_app_wiring(active_root: str) -> str:
-        component_name = "Calculator"
-        candidate_paths = [
-            os.path.join(active_root, "src", "Calculator.tsx"),
-            os.path.join(active_root, "src", "Calculator.jsx"),
-        ]
-        for candidate in candidate_paths:
-            if os.path.exists(candidate):
-                component_name = DevMasterGraph._component_name_from_file(os.path.basename(candidate))
-                break
-        return (
-            f"import {component_name} from './{component_name}';\n\n"
-            "export default function App() {\n"
-            f"  return <{component_name} />;\n"
-            "}\n"
-        )
-
-    @staticmethod
-    def _generate_initial_content(*, safe_target: str, file_name: str, details: str, active_root: str) -> str:
-        ext = os.path.splitext(safe_target)[1].lower()
-        lowered = f"{file_name} {details}".lower()
+    def _default_generated_content(path: str, file_name: str, details: str) -> str:
+        ext = os.path.splitext(path)[1].lower()
         if ext in {".tsx", ".jsx"}:
             component_name = DevMasterGraph._component_name_from_file(file_name)
-            if os.path.basename(safe_target).lower() == "app.tsx":
-                return DevMasterGraph._render_react_app_wiring(active_root)
-            if "calculator" in lowered:
-                return DevMasterGraph._render_calculator_component(component_name)
             return (
                 f"export default function {component_name}() {{\n"
-                "  return <div>Generated component</div>;\n"
+                f"  return <div>{details or 'Generated component'}</div>;\n"
                 "}\n"
             )
         if ext in {".ts", ".js"}:
             return "export {};\n"
-        if ext == ".py":
+        if ext in {".py"}:
             return "def main() -> None:\n    pass\n\n\nif __name__ == '__main__':\n    main()\n"
         if ext == ".md":
-            return f"# {file_name}\n\n{details or 'Generated by dev graph.'}\n"
-        return (details or "Generated by dev graph.") + "\n"
+            return f"# {file_name}\n\n{details or 'Generated content'}\n"
+        return (details or "Generated content") + "\n"
+
+    @staticmethod
+    def _llm_generate_file_content(
+        *,
+        state: DevGraphState,
+        target_path: str,
+        file_name: str,
+        details: str,
+        existing_content: str,
+    ) -> str:
+        requirement = str(state.get("plan", {}).get("summary", ""))
+        constraints = [str(x) for x in state.get("plan", {}).get("constraints", []) if isinstance(x, str)]
+        validation = [str(x) for x in state.get("plan", {}).get("validation", []) if isinstance(x, str)]
+        prompt = (
+            "You are a senior software engineer. Generate file content for a single target file. "
+            "Return ONLY the full file contents. No markdown fences.\n"
+            f"Target path: {target_path}\n"
+            f"File name: {file_name}\n"
+            f"Task details: {details}\n"
+            f"Requirement summary: {requirement}\n"
+            f"Constraints: {constraints}\n"
+            f"Validation expectations: {validation}\n"
+            f"Existing content (may be empty):\n{existing_content[:6000]}"
+        )
+        try:
+            from config import client  # lazy import to avoid hard dependency during tests
+        except Exception:
+            return DevMasterGraph._default_generated_content(target_path, file_name, details)
+        if not hasattr(client, "responses"):
+            return DevMasterGraph._default_generated_content(target_path, file_name, details)
+        try:
+            response = client.responses.create(
+                model=os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.1-codex-mini"),
+                input=[{"role": "user", "content": prompt}],
+            )
+            for item in response.output:
+                if item.type != "message":
+                    continue
+                for part in item.content:
+                    if part.type == "output_text":
+                        text = str(part.text or "").strip()
+                        if text:
+                            return text + ("" if text.endswith("\n") else "\n")
+        except Exception:
+            pass
+        return DevMasterGraph._default_generated_content(target_path, file_name, details)
 
     @staticmethod
     def _apply_target_in_pass(
         *,
+        state: DevGraphState,
         safe_target: str,
         file_name: str,
         active_root: str,
@@ -1228,33 +1306,25 @@ class DevMasterGraph:
                 return "missing_expected_file", "not_created_due_to_update_policy", safe_target
             with open(safe_target, "w", encoding="utf-8") as fh:
                 fh.write(
-                    DevMasterGraph._generate_initial_content(
-                        safe_target=safe_target,
+                    DevMasterGraph._llm_generate_file_content(
+                        state=state,
+                        target_path=safe_target,
                         file_name=file_name,
                         details=details,
-                        active_root=active_root,
+                        existing_content="",
                     )
                 )
             return "created_file", "generated_content", safe_target
 
         with open(safe_target, "r", encoding="utf-8", errors="ignore") as fh:
             original = fh.read()
-        if os.path.basename(safe_target).lower() == "app.tsx":
-            new_content = DevMasterGraph._render_react_app_wiring(active_root)
-        elif os.path.splitext(safe_target)[1].lower() in {".tsx", ".jsx"} and "calculator" in f"{file_name} {details}".lower():
-            component_name = DevMasterGraph._component_name_from_file(file_name)
-            new_content = DevMasterGraph._render_calculator_component(component_name)
-        else:
-            annotation = DevMasterGraph._comment_for_path(
-                safe_target,
-                f"Updated by dev graph pass {pass_index}: {details or 'target mutation'}",
-            )
-            if annotation in original:
-                new_content = original
-            elif pass_index == 1 and update_like:
-                new_content = annotation + original
-            else:
-                new_content = original + ("" if original.endswith("\n") else "\n") + annotation
+        new_content = DevMasterGraph._llm_generate_file_content(
+            state=state,
+            target_path=safe_target,
+            file_name=file_name,
+            details=details,
+            existing_content=original,
+        )
 
         if new_content != original:
             with open(safe_target, "w", encoding="utf-8") as fh:
@@ -1264,11 +1334,12 @@ class DevMasterGraph:
         if os.path.getsize(safe_target) == 0:
             with open(safe_target, "w", encoding="utf-8") as fh:
                 fh.write(
-                    DevMasterGraph._generate_initial_content(
-                        safe_target=safe_target,
+                    DevMasterGraph._llm_generate_file_content(
+                        state=state,
+                        target_path=safe_target,
                         file_name=file_name,
                         details=details,
-                        active_root=active_root,
+                        existing_content="",
                     )
                 )
             return "updated_file", "filled_empty_file", safe_target
@@ -1276,6 +1347,7 @@ class DevMasterGraph:
 
     @staticmethod
     def _run_implementation_review(state: DevGraphState, active_root: str, targets: List[Dict[str, str]]) -> List[str]:
+        _ = (active_root, targets)
         findings: List[str] = []
         touched = [str(p) for p in state.get("touched_paths", []) if isinstance(p, str)]
         for path in touched:
@@ -1291,32 +1363,6 @@ class DevMasterGraph:
                 findings.append(f"placeholder marker found in {DevMasterGraph._relpath_safe(state, path)}")
             if "todo" in lowered and len(content.strip()) < 220:
                 findings.append(f"file appears TODO-only in {DevMasterGraph._relpath_safe(state, path)}")
-
-        app_path = os.path.join(active_root, "src", "App.tsx")
-        has_app_target = any(str(t.get("file_name", "")).strip().lower().endswith("app.tsx") for t in targets)
-        if has_app_target and os.path.exists(app_path):
-            try:
-                with open(app_path, "r", encoding="utf-8", errors="ignore") as fh:
-                    app_content = fh.read()
-            except Exception:
-                app_content = ""
-            for target in targets:
-                file_name = str(target.get("file_name", "")).strip()
-                ext = os.path.splitext(file_name)[1].lower()
-                if ext not in {".tsx", ".jsx"}:
-                    continue
-                component = DevMasterGraph._component_name_from_file(file_name)
-                if component.lower() == "app":
-                    continue
-                component_file = os.path.join(active_root, "src", f"{component}.tsx")
-                if not os.path.exists(component_file):
-                    continue
-                import_hint = f"from './{component}'"
-                render_hint = f"<{component}"
-                if import_hint not in app_content or render_hint not in app_content:
-                    findings.append(
-                        f"missing wiring for component '{component}' in {DevMasterGraph._relpath_safe(state, app_path)}"
-                    )
         return findings
 
     @staticmethod
@@ -1393,6 +1439,7 @@ class DevMasterGraph:
                         except Exception:
                             before_text = ""
                     action, action_note, resolved_target = DevMasterGraph._apply_target_in_pass(
+                        state=state,
                         safe_target=safe_target,
                         file_name=file_name,
                         active_root=active_root,
@@ -1409,6 +1456,7 @@ class DevMasterGraph:
                             f"old_target={resolved_target} new_target={recovered_target}",
                         )
                         action, action_note, resolved_target = DevMasterGraph._apply_target_in_pass(
+                            state=state,
                             safe_target=recovered_target,
                             file_name=file_name,
                             active_root=active_root,
@@ -1427,6 +1475,7 @@ class DevMasterGraph:
                             f"old_target={resolved_target} new_target={discovered}",
                         )
                         action, action_note, resolved_target = DevMasterGraph._apply_target_in_pass(
+                            state=state,
                             safe_target=discovered,
                             file_name=file_name,
                             active_root=active_root,
@@ -1605,6 +1654,7 @@ class DevMasterGraph:
             max_retries=int(state.get("max_retries", 5)),
             reserve_last_for_llm=False,
             log_sink=state.get("log_sink"),
+            ask_confirmation=(lambda q: bool(state.get("ask_user")(q).strip().lower() in {"y", "yes", "true", "1"})) if callable(state.get("ask_user")) else None,
             stack_hint=(state.get("detected_stacks") or ["generic"])[0],
             ask_runtime_prompt=(lambda q: state.get("ask_user")(f"[DEV RUNTIME PROMPT] {q} (y/N)")) if callable(state.get("ask_user")) else None,
             interactive_prompt_timeout_seconds=60.0,
@@ -1700,6 +1750,7 @@ class DevMasterGraph:
             max_retries=int(state.get("max_retries", 5)),
             reserve_last_for_llm=False,
             log_sink=state.get("log_sink"),
+            ask_confirmation=(lambda q: bool(state.get("ask_user")(q).strip().lower() in {"y", "yes", "true", "1"})) if callable(state.get("ask_user")) else None,
             stack_hint=(state.get("detected_stacks") or ["generic"])[0],
             ask_runtime_prompt=(lambda q: state.get("ask_user")(f"[DEV RUNTIME PROMPT] {q} (y/N)")) if callable(state.get("ask_user")) else None,
             interactive_prompt_timeout_seconds=60.0,

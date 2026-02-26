@@ -45,12 +45,10 @@ class DevExecutorTests(unittest.TestCase):
             "npx create-react-app front-end --template typescript",
             "interactive_prompt",
         )
-        self.assertIn("--use-npm", cra)
+        self.assertIn("npx --yes", cra)
 
         nest = rewrite_command_deterministic("nest new back-end", "interactive_prompt")
-        self.assertIn("@nestjs/cli new back-end", nest)
-        self.assertIn("--package-manager npm", nest)
-        self.assertIn("--skip-git", nest)
+        self.assertEqual(nest, "nest new back-end")
 
     def test_deterministic_rewrite_normalizes_vite_target(self) -> None:
         vite = rewrite_command_deterministic(

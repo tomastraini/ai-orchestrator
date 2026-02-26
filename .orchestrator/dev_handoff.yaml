@@ -1,7 +1,7 @@
 schema: HandoffPackYAML/v1
 meta:
   request_id: req-checklist-2
-  generated_at: '2026-02-25T19:40:12.355436+00:00'
+  generated_at: '2026-02-26T00:43:41.759475+00:00'
 goal:
   constraints:
   - Do not push
@@ -28,7 +28,7 @@ execution:
     command: python -c "print('bootstrap')"
     purpose: bootstrap
   structure_plan:
-  - path: projects/calculator/front-end
+  - path: projects/calculator
     kind: required
   command_policy:
     risk_confirmation: true

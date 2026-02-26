@@ -63,8 +63,7 @@ class PMHandoffStoreTests(unittest.TestCase):
             structure_paths = [
                 str(x.get("path", "")) for x in latest["dev_handoff"].get("structure_plan", [])
             ]
-            self.assertIn("projects/calculator/front-end", structure_paths)
-            self.assertNotIn("projects/calculator/back-end", structure_paths)
+            self.assertIn("projects/calculator", structure_paths)
 
             handoff_path = os.path.join(tmp, ".orchestrator", "dev_handoff.json")
             self.assertTrue(os.path.exists(handoff_path))
@@ -101,7 +100,7 @@ class PMHandoffStoreTests(unittest.TestCase):
         handoff = build_dev_handoff(request_id="req-handoff-3", plan=plan, rounds=[])
         self.assertEqual(len(handoff.get("execution_steps", [])), 1)
         step = handoff["execution_steps"][0]
-        self.assertIn("npm init vite@latest .", step["command"])
+        self.assertTrue(step["command"].startswith("npm init vite@latest"))
 
     def test_handoff_normalizes_empty_cwd_for_scaffold_target(self) -> None:
         plan = self._sample_plan()

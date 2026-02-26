@@ -88,7 +88,7 @@ class PMMandatoryChecklistTests(unittest.TestCase):
         # Clarifications are now dynamic and may be zero for sufficiently clear inputs.
         self.assertGreaterEqual(len(asked), 0)
         self.assertEqual(plan["pm_checklist"]["project_scope"], "new_project")
-        self.assertEqual(plan["pm_checklist"]["architecture"], "fullstack")
+        self.assertEqual(plan["pm_checklist"]["architecture"], "custom")
         self.assertEqual(plan["pm_checklist"]["backend_required"], "yes")
         self.assertEqual(plan["pm_checklist"]["database_required"], "no")
 

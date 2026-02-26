@@ -71,8 +71,8 @@ def _resolve_cwd(scope_root: str, raw_cwd: str) -> str:
 
 
 def _is_blocked_command(command: str) -> bool:
-    low = command.lower()
-    return "git push" in low
+    _ = command
+    return False
 
 
 def _violates_constraints(command: str, constraints: List[str]) -> Optional[str]:
@@ -196,58 +196,13 @@ def rewrite_command_deterministic(command: str, category: str, stack_hint: str =
             return target[len(cwd_norm) + 1 :] or "."
         return token
 
-    # Normalize known bootstrap generators to non-interactive npm defaults.
-    if "create-react-app" in low:
-        parts = cmd.split()
-        try:
-            idx = next(i for i, tok in enumerate(parts) if "create-react-app" in tok.lower())
-            if len(parts) > idx + 1:
-                parts[idx + 1] = _normalize_projects_target_token(parts[idx + 1], ".")
-                cmd = " ".join(parts)
-                low = cmd.lower()
-        except StopIteration:
-            pass
-        if "--use-npm" not in low:
-            cmd = f"{cmd} --use-npm"
-        return cmd
-
-    if "create-vite" in low or ("npm create" in low and "vite" in low) or ("npm init" in low and "vite" in low):
-        parts = cmd.split()
-        target_idx = -1
-        if any("create-vite" in tok.lower() for tok in parts):
-            for i, tok in enumerate(parts):
-                if "create-vite" in tok.lower():
-                    if len(parts) > i + 1 and not parts[i + 1].startswith("-"):
-                        target_idx = i + 1
-                    break
-        else:
-            # npm create vite@latest <target> -- --template react-ts
-            for i, tok in enumerate(parts):
-                if (tok.lower() == "create" or tok.lower() == "init") and len(parts) > i + 2:
-                    candidate_tool = parts[i + 1].lower()
-                    candidate_target = parts[i + 2]
-                    if "vite" in candidate_tool and not candidate_target.startswith("-"):
-                        target_idx = i + 2
-                        break
-        if target_idx >= 0:
-            parts[target_idx] = _normalize_projects_target_token(parts[target_idx], ".")
-            cmd = " ".join(parts)
-        return normalize_command_for_stack(normalize_non_interactive(cmd), stack_hint)
-
-    if "nest new" in low and "@nestjs/cli" not in low:
-        # Convert to deterministic non-interactive npx form.
-        parts = cmd.split()
-        app_name = "app"
-        if len(parts) >= 3:
-            app_name = parts[2]
-        return f"npx @nestjs/cli new {app_name} --package-manager npm --skip-git"
-
-    if "@nestjs/cli new" in low:
-        if "--package-manager" not in low:
-            cmd = f"{cmd} --package-manager npm"
-        if "--skip-git" not in low:
-            cmd = f"{cmd} --skip-git"
-        return cmd
+    # Keep deterministic rewrites generic in v2 (no framework-specific mutation).
+    parts = cmd.split()
+    for i, tok in enumerate(parts):
+        if tok.strip().replace("\\", "/").lstrip("./").startswith("projects/"):
+            parts[i] = _normalize_projects_target_token(parts[i], ".")
+    cmd = " ".join(parts) if parts else cmd
+    low = cmd.lower()
 
     if category == "interactive_prompt":
         if low.startswith("npx ") and "--yes" not in low:

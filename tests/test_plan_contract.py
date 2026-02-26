@@ -85,11 +85,7 @@ class PlanSchemaTests(unittest.TestCase):
         plan = _base_plan_new_project()
         plan["bootstrap_commands"] = []
         ok, errors = validate_plan_json(plan, requirement="Create calculator app")
-        self.assertFalse(ok)
-        self.assertTrue(
-            any("bootstrap_commands" in e and "new_project" in e for e in errors),
-            msg=str(errors),
-        )
+        self.assertTrue(ok, msg=str(errors))
 
     def test_new_project_requires_projects_root_path_hint(self) -> None:
         plan = _base_plan_new_project()
@@ -104,7 +100,7 @@ class PlanSchemaTests(unittest.TestCase):
         normalized = _normalize_new_project_plan(plan)
         ok, errors = validate_plan_json(normalized, requirement="Create calculator app")
         self.assertTrue(ok, msg=str(errors))
-        self.assertGreaterEqual(len(normalized["target_files"]), 2)
+        self.assertGreaterEqual(len(normalized["target_files"]), 1)
         for target in normalized["target_files"]:
             self.assertTrue(
                 str(target["expected_path_hint"]).startswith("projects/"),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 from shared.pathing import normalize_rel_path
@@ -115,4 +116,58 @@ def scan_projects_root(projects_root: str) -> Dict[str, Any]:
             }
         )
     return {"projects_root": "projects", "projects": projects}
+
+
+def scan_workspace_context(repo_root: str, *, file_limit: int = 400) -> Dict[str, Any]:
+    """
+    Lightweight, read-only workspace discovery for PM/DEV reasoning.
+    """
+    projects_root = os.path.join(repo_root, "projects")
+    projects_snapshot = scan_projects_root(projects_root)
+    sampled_files: List[str] = []
+    for root, dirs, files in os.walk(repo_root):
+        dirs[:] = [
+            d
+            for d in dirs
+            if d not in {".git", ".venv", "__pycache__", "node_modules", ".cursor", ".orchestrator"}
+        ]
+        for name in files:
+            rel = normalize_rel_path(os.path.relpath(os.path.join(root, name), repo_root))
+            sampled_files.append(rel)
+            if len(sampled_files) >= file_limit:
+                break
+        if len(sampled_files) >= file_limit:
+            break
+    extension_histogram: Dict[str, int] = {}
+    for rel in sampled_files:
+        ext = os.path.splitext(rel)[1].lower() or "<no_ext>"
+        extension_histogram[ext] = extension_histogram.get(ext, 0) + 1
+    return {
+        "repo_root": normalize_rel_path(repo_root),
+        "projects_snapshot": projects_snapshot,
+        "sampled_files": sampled_files,
+        "extension_histogram": extension_histogram,
+    }
+
+
+def rank_candidate_files(requirement: str, files: List[str], *, top_k: int = 40) -> List[Dict[str, Any]]:
+    """
+    Likelihood-based ranking from requirement tokens against candidate files.
+    """
+    tokens = [t.lower() for t in re.findall(r"[A-Za-z0-9_]+", requirement or "") if len(t) >= 3]
+    scored: List[Dict[str, Any]] = []
+    for rel in files:
+        rel_low = rel.lower()
+        score = 0
+        hits: List[str] = []
+        for tok in tokens:
+            if tok in rel_low:
+                score += 5
+                hits.append(tok)
+        if rel_low.endswith(("readme.md", "package.json", "pyproject.toml", "requirements.txt")):
+            score += 1
+        if score > 0:
+            scored.append({"path": rel, "score": score, "hits": sorted(set(hits))})
+    scored.sort(key=lambda x: int(x.get("score", 0)), reverse=True)
+    return scored[: max(1, int(top_k))]
 

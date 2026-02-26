@@ -48,4 +48,7 @@ class DevGraphState(TypedDict, total=False):
     task_outcomes: List[Dict[str, Any]]
     checklist_cursor: str
     telemetry_events: List[Dict[str, Any]]
+    dev_discovery_candidates: List[Dict[str, Any]]
+    dev_technical_plan: Dict[str, Any]
+    dev_plan_approved: bool
 

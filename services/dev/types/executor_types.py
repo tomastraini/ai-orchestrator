@@ -14,3 +14,5 @@ ExecuteDevTasksResult = Tuple[
 ]
 RecoveryRunResult = Tuple[List[str], Optional[str], Dict[str, Any]]
 
+DevTechnicalPlan = Dict[str, Any]
+

@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Optional
 from config import client
 from services.pm.dev_handoff_store import DevHandoffStore, build_dev_handoff
 from services.pm.pm_context_store import PMContextStore
-from services.workspace.project_index import scan_projects_root
+from services.workspace.project_index import rank_candidate_files, scan_workspace_context
 from shared.pathing import canonical_projects_path
 from shared.schemas import PlanJSON, validate_plan_json
 
@@ -43,6 +43,8 @@ def _infer_checklist_from_text(
         inferred["architecture"] = "frontend_only"
     elif _contains_any(req, ["fullstack", "full stack"]):
         inferred["architecture"] = "fullstack"
+    else:
+        inferred["architecture"] = "custom"
 
     if _contains_any(req, ["no backend", "without backend", "frontend-only", "frontend only"]):
         inferred["backend_required"] = "no"
@@ -98,42 +100,15 @@ def _normalize_new_project_plan(
 
     checklist = checklist or {}
     if len(target_files) == 0:
-        wants_frontend = checklist.get("architecture") in {"frontend_only", "fullstack"}
-        wants_backend = checklist.get("backend_required") == "yes"
-        wants_database = checklist.get("database_required") == "yes"
-
-        if not wants_frontend and not wants_backend:
-            # Keep sensible MVP default when checklist is incomplete.
-            wants_frontend = True
-            wants_backend = True
-
-        if wants_frontend:
-            target_files.append(
-                {
-                    "file_name": "front-end",
-                    "expected_path_hint": f"{project_root}/front-end",
-                    "modification_type": "create_directory",
-                    "details": "Create frontend workspace directory.",
-                }
-            )
-        if wants_backend:
-            target_files.append(
-                {
-                    "file_name": "back-end",
-                    "expected_path_hint": f"{project_root}/back-end",
-                    "modification_type": "create_directory",
-                    "details": "Create backend workspace directory.",
-                }
-            )
-        if wants_database:
-            target_files.append(
-                {
-                    "file_name": "database",
-                    "expected_path_hint": f"{project_root}/database",
-                    "modification_type": "create_directory",
-                    "details": "Create database workspace directory.",
-                }
-            )
+        # v2 clean-break: do not hardcode front/back/database structure.
+        target_files.append(
+            {
+                "file_name": "README.md",
+                "expected_path_hint": f"{project_root}/README.md",
+                "modification_type": "create",
+                "details": "Document scope, setup, run instructions, and acceptance criteria.",
+            }
+        )
     return plan
 
 
@@ -239,6 +214,9 @@ Policies:
 - Prefer deterministic non-interactive bootstrap commands, but avoid hardcoding framework assumptions.
 - Ask clarification questions dynamically (no hardcoded script). Questions must be concise and answerable.
 - Respect any preselected project_ref from user-confirmed routing.
+- You are a senior PM at a large company. Produce an implementation-ready contract for senior developers.
+- Include explicit code review guidelines and acceptance criteria tied to user intent.
+- Encourage deep discovery over the workspace context before finalizing the plan.
 
 Wrapper format:
 {{
@@ -258,7 +236,7 @@ Wrapper format:
     "stack": {{"frontend": "string", "backend": "string or null", "language_preferences": ["string"]}},
     "pm_checklist": {{
       "project_scope": "new_project|existing_project",
-      "architecture": "frontend_only|fullstack",
+      "architecture": "string",
       "backend_required": "yes|no",
       "database_required": "yes|no"
     }},
@@ -267,6 +245,9 @@ Wrapper format:
     "constraints": ["string"],
     "validation": ["string"],
     "clarification_summary": ["string"],
+    "review_guidelines": ["string"],
+    "technical_preferences": {{"any_key": "any_value"}},
+    "discovery_hints": ["string"],
     "product_contract": {{
       "goals": ["string"],
       "acceptance_criteria": ["string"],
@@ -397,8 +378,9 @@ def create_plan(
         )
 
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    projects_root = os.path.join(repo_root, "projects")
-    workspace_context = scan_projects_root(projects_root)
+    workspace_context = scan_workspace_context(repo_root, file_limit=500)
+    candidate_files = rank_candidate_files(requirement, workspace_context.get("sampled_files", []), top_k=80)
+    workspace_context["ranked_prompt_candidates"] = candidate_files
 
     model_calls = 0
 
@@ -458,6 +440,22 @@ def create_plan(
             plan["clarification_summary"] = [
                 f"Q: {entry['question']} | A: {entry['answer']}" for entry in rounds
             ]
+        if "review_guidelines" not in plan or not isinstance(plan.get("review_guidelines"), list):
+            plan["review_guidelines"] = [
+                "No placeholder-only code or unresolved TODO markers in shipped files",
+                "Changes must compile/build in the selected stack",
+                "Each acceptance criterion must map to at least one implemented file or command check",
+            ]
+        if "technical_preferences" not in plan or not isinstance(plan.get("technical_preferences"), dict):
+            plan["technical_preferences"] = {
+                "autonomy_mode": "llm_first_with_guardrails",
+                "scope_boundary": "projects_only_without_explicit_approval_outside_scope",
+            }
+        if "discovery_hints" not in plan or not isinstance(plan.get("discovery_hints"), list):
+            plan["discovery_hints"] = [
+                "Search repository for related symbols before editing",
+                "Rank candidate files by likelihood of relevance to requirement",
+            ]
         if "product_contract" not in plan or not isinstance(plan.get("product_contract"), dict):
             plan["product_contract"] = {
                 "goals": [f"Deliver requested outcome: {requirement.strip()}"],
@@ -470,7 +468,7 @@ def create_plan(
         pm_checklist = plan.get("pm_checklist") if isinstance(plan.get("pm_checklist"), dict) else {}
         plan["pm_checklist"] = {
             "project_scope": str(checklist.get("project_scope") or pm_checklist.get("project_scope") or "new_project"),
-            "architecture": str(checklist.get("architecture") or pm_checklist.get("architecture") or "fullstack"),
+            "architecture": str(checklist.get("architecture") or pm_checklist.get("architecture") or "custom"),
             "backend_required": str(checklist.get("backend_required") or pm_checklist.get("backend_required") or "yes"),
             "database_required": str(checklist.get("database_required") or pm_checklist.get("database_required") or "no"),
         }

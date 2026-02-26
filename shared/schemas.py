@@ -20,10 +20,16 @@ ALLOWED_TOP_LEVEL_KEYS = {
     "clarification_summary",
     "product_contract",
     "ambiguities",
+    "technical_preferences",
+    "review_guidelines",
+    "discovery_hints",
 }
 REQUIRED_TOP_LEVEL_KEYS = set(ALLOWED_TOP_LEVEL_KEYS)
 REQUIRED_TOP_LEVEL_KEYS.remove("product_contract")
 REQUIRED_TOP_LEVEL_KEYS.remove("ambiguities")
+REQUIRED_TOP_LEVEL_KEYS.remove("technical_preferences")
+REQUIRED_TOP_LEVEL_KEYS.remove("review_guidelines")
+REQUIRED_TOP_LEVEL_KEYS.remove("discovery_hints")
 ALLOWED_TARGET_FILE_KEYS = {
     "file_name",
     "expected_path_hint",
@@ -33,12 +39,7 @@ ALLOWED_TARGET_FILE_KEYS = {
 ALLOWED_PROJECT_REF_KEYS = {"name", "path_hint"}
 ALLOWED_STACK_KEYS = {"frontend", "backend", "language_preferences"}
 ALLOWED_BOOTSTRAP_COMMAND_KEYS = {"cwd", "command", "purpose"}
-ALLOWED_PM_CHECKLIST_KEYS = {
-    "project_scope",
-    "architecture",
-    "backend_required",
-    "database_required",
-}
+ALLOWED_PM_CHECKLIST_KEYS = {"project_scope", "architecture", "backend_required", "database_required"}
 
 
 def _is_non_empty_str(x: Any) -> bool:
@@ -155,7 +156,7 @@ def validate_plan_json(plan: Any, requirement: Optional[str] = None) -> Tuple[bo
         )
         errors.extend(_require_typescript_preference(stack, requirement))
 
-    # pm_checklist
+    # pm_checklist (kept for compatibility but intentionally flexible in v2)
     pm_checklist = plan.get("pm_checklist")
     if not isinstance(pm_checklist, dict):
         errors.append("Field 'pm_checklist' must be an object.")
@@ -163,32 +164,17 @@ def validate_plan_json(plan: Any, requirement: Optional[str] = None) -> Tuple[bo
         errors.extend(
             _validate_no_unknown_keys(pm_checklist, ALLOWED_PM_CHECKLIST_KEYS, "pm_checklist")
         )
-        project_scope = pm_checklist.get("project_scope")
-        if project_scope not in {"new_project", "existing_project"}:
-            errors.append(
-                "Field 'pm_checklist.project_scope' must be 'new_project' or 'existing_project'."
-            )
-        architecture = pm_checklist.get("architecture")
-        if architecture not in {"frontend_only", "fullstack"}:
-            errors.append(
-                "Field 'pm_checklist.architecture' must be 'frontend_only' or 'fullstack'."
-            )
-        backend_required = pm_checklist.get("backend_required")
-        if backend_required not in {"yes", "no"}:
-            errors.append("Field 'pm_checklist.backend_required' must be 'yes' or 'no'.")
-        database_required = pm_checklist.get("database_required")
-        if database_required not in {"yes", "no"}:
-            errors.append("Field 'pm_checklist.database_required' must be 'yes' or 'no'.")
+        for key in ["project_scope", "architecture", "backend_required", "database_required"]:
+            value = pm_checklist.get(key)
+            if value is not None and not _is_non_empty_str(value):
+                errors.append(f"Field 'pm_checklist.{key}' must be a non-empty string when provided.")
 
     # bootstrap_commands
     bootstrap_commands = plan.get("bootstrap_commands")
     if not isinstance(bootstrap_commands, list):
         errors.append("Field 'bootstrap_commands' must be an array.")
     else:
-        if project_mode == "new_project" and len(bootstrap_commands) == 0:
-            errors.append(
-                "Field 'bootstrap_commands' must be non-empty when project_mode is 'new_project'."
-            )
+        # In v2, bootstrap commands can be intentionally empty if DEV plans to create files directly.
         for i, cmd in enumerate(bootstrap_commands):
             if not isinstance(cmd, dict):
                 errors.append(f"bootstrap_commands[{i}] must be an object.")
@@ -204,8 +190,8 @@ def validate_plan_json(plan: Any, requirement: Optional[str] = None) -> Tuple[bo
 
     # target_files
     target_files = plan.get("target_files")
-    if not isinstance(target_files, list) or len(target_files) == 0:
-        errors.append("Field 'target_files' must be a non-empty array.")
+    if not isinstance(target_files, list):
+        errors.append("Field 'target_files' must be an array.")
     else:
         for i, tf in enumerate(target_files):
             if not isinstance(tf, dict):
@@ -228,22 +214,10 @@ def validate_plan_json(plan: Any, requirement: Optional[str] = None) -> Tuple[bo
                 )
 
     # constraints
-    errors.extend(
-        _require_list_of_non_empty_strings(
-            plan.get("constraints"),
-            "constraints",
-            allow_empty=False,
-        )
-    )
+    errors.extend(_require_list_of_non_empty_strings(plan.get("constraints"), "constraints", allow_empty=True))
 
     # validation
-    errors.extend(
-        _require_list_of_non_empty_strings(
-            plan.get("validation"),
-            "validation",
-            allow_empty=False,
-        )
-    )
+    errors.extend(_require_list_of_non_empty_strings(plan.get("validation"), "validation", allow_empty=True))
 
     # clarification_summary (can be empty if no questions needed)
     errors.extend(
@@ -275,5 +249,17 @@ def validate_plan_json(plan: Any, requirement: Optional[str] = None) -> Tuple[bo
                 allow_empty=True,
             )
         )
+
+    review_guidelines = plan.get("review_guidelines")
+    if review_guidelines is not None:
+        errors.extend(_require_list_of_non_empty_strings(review_guidelines, "review_guidelines", allow_empty=True))
+
+    technical_preferences = plan.get("technical_preferences")
+    if technical_preferences is not None and not isinstance(technical_preferences, dict):
+        errors.append("Field 'technical_preferences' must be an object when provided.")
+
+    discovery_hints = plan.get("discovery_hints")
+    if discovery_hints is not None:
+        errors.extend(_require_list_of_non_empty_strings(discovery_hints, "discovery_hints", allow_empty=True))
 
     return (len(errors) == 0), errors

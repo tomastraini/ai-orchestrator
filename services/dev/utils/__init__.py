@@ -12,8 +12,6 @@ from services.dev.utils.file_content_utils import (
     comment_for_path,
     component_name_from_file,
     generate_initial_content,
-    render_calculator_component,
-    render_react_app_wiring,
 )
 from services.dev.utils.logging_utils import emit_state_event, emit_state_log, relpath_safe, sanitize_text
 from services.dev.utils.path_utils import (

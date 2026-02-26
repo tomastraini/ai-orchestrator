@@ -21,71 +21,14 @@ def component_name_from_file(file_name: str) -> str:
     return cleaned[0].upper() + cleaned[1:]
 
 
-def render_calculator_component(component_name: str) -> str:
-    return (
-        "import { useMemo, useState } from 'react';\n\n"
-        f"export default function {component_name}() {{\n"
-        "  const [left, setLeft] = useState<string>('0');\n"
-        "  const [right, setRight] = useState<string>('0');\n"
-        "  const [operation, setOperation] = useState<'add' | 'subtract'>('add');\n\n"
-        "  const result = useMemo(() => {\n"
-        "    const a = Number(left);\n"
-        "    const b = Number(right);\n"
-        "    if (Number.isNaN(a) || Number.isNaN(b)) return 'Invalid input';\n"
-        "    return operation === 'add' ? String(a + b) : String(a - b);\n"
-        "  }, [left, right, operation]);\n\n"
-        "  return (\n"
-        "    <main style={{ fontFamily: 'Arial, sans-serif', margin: '2rem auto', maxWidth: 420 }}>\n"
-        f"      <h1>{component_name}</h1>\n"
-        "      <label>\n"
-        "        First number\n"
-        "        <input type=\"number\" value={left} onChange={(e) => setLeft(e.target.value)} />\n"
-        "      </label>\n"
-        "      <label style={{ display: 'block', marginTop: 12 }}>\n"
-        "        Second number\n"
-        "        <input type=\"number\" value={right} onChange={(e) => setRight(e.target.value)} />\n"
-        "      </label>\n"
-        "      <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>\n"
-        "        <button type=\"button\" onClick={() => setOperation('add')}>Add</button>\n"
-        "        <button type=\"button\" onClick={() => setOperation('subtract')}>Subtract</button>\n"
-        "      </div>\n"
-        "      <p style={{ marginTop: 16 }}><strong>Result:</strong> {result}</p>\n"
-        "    </main>\n"
-        "  );\n"
-        "}\n"
-    )
-
-
-def render_react_app_wiring(active_root: str) -> str:
-    component_name = "Calculator"
-    candidate_paths = [
-        os.path.join(active_root, "src", "Calculator.tsx"),
-        os.path.join(active_root, "src", "Calculator.jsx"),
-    ]
-    for candidate in candidate_paths:
-        if os.path.exists(candidate):
-            component_name = component_name_from_file(os.path.basename(candidate))
-            break
-    return (
-        f"import {component_name} from './{component_name}';\n\n"
-        "export default function App() {\n"
-        f"  return <{component_name} />;\n"
-        "}\n"
-    )
-
-
 def generate_initial_content(*, safe_target: str, file_name: str, details: str, active_root: str) -> str:
+    _ = active_root
     ext = os.path.splitext(safe_target)[1].lower()
-    lowered = f"{file_name} {details}".lower()
     if ext in {".tsx", ".jsx"}:
         component_name = component_name_from_file(file_name)
-        if os.path.basename(safe_target).lower() == "app.tsx":
-            return render_react_app_wiring(active_root)
-        if "calculator" in lowered:
-            return render_calculator_component(component_name)
         return (
             f"export default function {component_name}() {{\n"
-            "  return <div>Generated component</div>;\n"
+            f"  return <div>{details or 'Generated component'}</div>;\n"
             "}\n"
         )
     if ext in {".ts", ".js"}:
