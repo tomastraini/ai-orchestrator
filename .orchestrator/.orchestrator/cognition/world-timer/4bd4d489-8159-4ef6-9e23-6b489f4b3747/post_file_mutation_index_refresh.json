@@ -1,0 +1,1149 @@
+{
+  "generated_at": "2026-02-26T19:09:24.168153+00:00",
+  "phase": "post_file_mutation_index_refresh",
+  "cognition": {
+    "version": "2.0",
+    "generated_at": "2026-02-26T19:09:24.167555+00:00",
+    "project_root": "home/vboxuser/Documents/repositories/ai-orchestrator/projects/world-timer",
+    "workspace_hash": "f14cb54b833d7c26e3eb7bd53499212ffe19d345",
+    "provider_capabilities": {
+      "tree_sitter": false,
+      "tree_sitter_languages": false,
+      "libcst": false,
+      "networkx": false,
+      "yaml": true,
+      "orjson": true
+    },
+    "active_root": "home/vboxuser/Documents/repositories/ai-orchestrator/projects/world-timer",
+    "file_count": 22,
+    "files": [
+      {
+        "path": "README.md",
+        "kind": "doc",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "tsconfig.node.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "vite.config.ts",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [],
+        "imports": [
+          {
+            "module": "vite",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "@vitejs/plugin-react",
+            "members": [],
+            "is_external": true
+          }
+        ],
+        "exports": [],
+        "relationships": [
+          {
+            "type": "imports",
+            "target": "vite"
+          },
+          {
+            "type": "imports",
+            "target": "@vitejs/plugin-react"
+          }
+        ],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "index.html",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.1,
+        "confidence": 0.9
+      },
+      {
+        "path": "eslint.config.js",
+        "kind": "source",
+        "language": "javascript",
+        "symbols": [],
+        "imports": [
+          {
+            "module": "@eslint/js",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "globals",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "eslint-plugin-react-hooks",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "eslint-plugin-react-refresh",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "typescript-eslint",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "eslint/config",
+            "members": [],
+            "is_external": true
+          }
+        ],
+        "exports": [],
+        "relationships": [
+          {
+            "type": "imports",
+            "target": "@eslint/js"
+          },
+          {
+            "type": "imports",
+            "target": "globals"
+          },
+          {
+            "type": "imports",
+            "target": "eslint-plugin-react-hooks"
+          },
+          {
+            "type": "imports",
+            "target": "eslint-plugin-react-refresh"
+          },
+          {
+            "type": "imports",
+            "target": "typescript-eslint"
+          },
+          {
+            "type": "imports",
+            "target": "eslint/config"
+          }
+        ],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "tsconfig.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "package-lock.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": ".gitignore",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "package.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "tsconfig.app.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "public/index.html",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.1,
+        "confidence": 0.9
+      },
+      {
+        "path": "public/vite.svg",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "public/script.js",
+        "kind": "source",
+        "language": "javascript",
+        "symbols": [
+          {
+            "name": "displayError",
+            "kind": "function",
+            "line": 11,
+            "end_line": 11
+          },
+          {
+            "name": "displayTime",
+            "kind": "function",
+            "line": 6,
+            "end_line": 6
+          },
+          {
+            "name": "fetchJakartaTime",
+            "kind": "function",
+            "line": 16,
+            "end_line": 16
+          }
+        ],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/App.tsx",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [
+          {
+            "name": "App",
+            "kind": "function",
+            "line": 6,
+            "end_line": 6
+          }
+        ],
+        "imports": [
+          {
+            "module": "react",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "src/assets/react.svg",
+            "members": [],
+            "is_external": false
+          },
+          {
+            "module": "/vite.svg",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "src/App.css",
+            "members": [],
+            "is_external": false
+          }
+        ],
+        "exports": [],
+        "relationships": [
+          {
+            "type": "imports",
+            "target": "react"
+          },
+          {
+            "type": "imports",
+            "target": "src/assets/react.svg"
+          },
+          {
+            "type": "imports",
+            "target": "/vite.svg"
+          },
+          {
+            "type": "imports",
+            "target": "src/App.css"
+          }
+        ],
+        "entrypoint_score": 0.13,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/main.tsx",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [],
+        "imports": [
+          {
+            "module": "react",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "react-dom/client",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "src/index.css",
+            "members": [],
+            "is_external": false
+          },
+          {
+            "module": "src/App.tsx",
+            "members": [],
+            "is_external": false
+          }
+        ],
+        "exports": [],
+        "relationships": [
+          {
+            "type": "imports",
+            "target": "react"
+          },
+          {
+            "type": "imports",
+            "target": "react-dom/client"
+          },
+          {
+            "type": "imports",
+            "target": "src/index.css"
+          },
+          {
+            "type": "imports",
+            "target": "src/App.tsx"
+          }
+        ],
+        "entrypoint_score": 0.8,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/index.css",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.13,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/app.module.ts",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [
+          {
+            "name": "AppModule",
+            "kind": "class",
+            "line": 7,
+            "end_line": 7
+          }
+        ],
+        "imports": [
+          {
+            "module": "@nestjs/common",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "src/time/time.module",
+            "members": [],
+            "is_external": false
+          }
+        ],
+        "exports": [],
+        "relationships": [
+          {
+            "type": "imports",
+            "target": "@nestjs/common"
+          },
+          {
+            "type": "imports",
+            "target": "src/time/time.module"
+          }
+        ],
+        "entrypoint_score": 0.1,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/main.ts",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [
+          {
+            "name": "AppModule",
+            "kind": "class",
+            "line": 34,
+            "end_line": 34
+          },
+          {
+            "name": "FrontendController",
+            "kind": "class",
+            "line": 24,
+            "end_line": 24
+          },
+          {
+            "name": "TimeController",
+            "kind": "class",
+            "line": 16,
+            "end_line": 16
+          },
+          {
+            "name": "bootstrap",
+            "kind": "function",
+            "line": 36,
+            "end_line": 36
+          }
+        ],
+        "imports": [
+          {
+            "module": "@nestjs/core",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "@nestjs/common",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "@nestjs/platform-express",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "path",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "express",
+            "members": [],
+            "is_external": true
+          }
+        ],
+        "exports": [],
+        "relationships": [
+          {
+            "type": "imports",
+            "target": "@nestjs/core"
+          },
+          {
+            "type": "imports",
+            "target": "@nestjs/common"
+          },
+          {
+            "type": "imports",
+            "target": "@nestjs/platform-express"
+          },
+          {
+            "type": "imports",
+            "target": "path"
+          },
+          {
+            "type": "imports",
+            "target": "express"
+          }
+        ],
+        "entrypoint_score": 0.8,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/App.css",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.13,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/assets/react.svg",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.03,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/time/time.service.ts",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [
+          {
+            "name": "TimeService",
+            "kind": "class",
+            "line": 8,
+            "end_line": 8
+          }
+        ],
+        "imports": [
+          {
+            "module": "@nestjs/common",
+            "members": [],
+            "is_external": true
+          }
+        ],
+        "exports": [],
+        "relationships": [
+          {
+            "type": "imports",
+            "target": "@nestjs/common"
+          }
+        ],
+        "entrypoint_score": 0.0,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/time/time.controller.ts",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [
+          {
+            "name": "TimeController",
+            "kind": "class",
+            "line": 4,
+            "end_line": 4
+          }
+        ],
+        "imports": [
+          {
+            "module": "@nestjs/common",
+            "members": [],
+            "is_external": true
+          }
+        ],
+        "exports": [],
+        "relationships": [
+          {
+            "type": "imports",
+            "target": "@nestjs/common"
+          }
+        ],
+        "entrypoint_score": 0.0,
+        "confidence": 0.9
+      }
+    ],
+    "symbol_index": {
+      "files": [
+        {
+          "path": "public/script.js",
+          "language": "javascript",
+          "symbols": [
+            {
+              "name": "displayError",
+              "kind": "function",
+              "line": 11,
+              "end_line": 11
+            },
+            {
+              "name": "displayTime",
+              "kind": "function",
+              "line": 6,
+              "end_line": 6
+            },
+            {
+              "name": "fetchJakartaTime",
+              "kind": "function",
+              "line": 16,
+              "end_line": 16
+            }
+          ]
+        },
+        {
+          "path": "src/App.tsx",
+          "language": "javascript",
+          "symbols": [
+            {
+              "name": "App",
+              "kind": "function",
+              "line": 6,
+              "end_line": 6
+            }
+          ]
+        },
+        {
+          "path": "src/app.module.ts",
+          "language": "javascript",
+          "symbols": [
+            {
+              "name": "AppModule",
+              "kind": "class",
+              "line": 7,
+              "end_line": 7
+            }
+          ]
+        },
+        {
+          "path": "src/main.ts",
+          "language": "javascript",
+          "symbols": [
+            {
+              "name": "AppModule",
+              "kind": "class",
+              "line": 34,
+              "end_line": 34
+            },
+            {
+              "name": "FrontendController",
+              "kind": "class",
+              "line": 24,
+              "end_line": 24
+            },
+            {
+              "name": "TimeController",
+              "kind": "class",
+              "line": 16,
+              "end_line": 16
+            },
+            {
+              "name": "bootstrap",
+              "kind": "function",
+              "line": 36,
+              "end_line": 36
+            }
+          ]
+        },
+        {
+          "path": "src/time/time.service.ts",
+          "language": "javascript",
+          "symbols": [
+            {
+              "name": "TimeService",
+              "kind": "class",
+              "line": 8,
+              "end_line": 8
+            }
+          ]
+        },
+        {
+          "path": "src/time/time.controller.ts",
+          "language": "javascript",
+          "symbols": [
+            {
+              "name": "TimeController",
+              "kind": "class",
+              "line": 4,
+              "end_line": 4
+            }
+          ]
+        }
+      ],
+      "by_name": {
+        "displayError": [
+          "public/script.js"
+        ],
+        "displayTime": [
+          "public/script.js"
+        ],
+        "fetchJakartaTime": [
+          "public/script.js"
+        ],
+        "App": [
+          "src/App.tsx"
+        ],
+        "AppModule": [
+          "src/app.module.ts",
+          "src/main.ts"
+        ],
+        "FrontendController": [
+          "src/main.ts"
+        ],
+        "TimeController": [
+          "src/main.ts",
+          "src/time/time.controller.ts"
+        ],
+        "bootstrap": [
+          "src/main.ts"
+        ],
+        "TimeService": [
+          "src/time/time.service.ts"
+        ]
+      }
+    },
+    "graph": {
+      "nodes": [
+        "README.md",
+        "tsconfig.node.json",
+        "vite.config.ts",
+        "index.html",
+        "eslint.config.js",
+        "tsconfig.json",
+        "package-lock.json",
+        ".gitignore",
+        "package.json",
+        "tsconfig.app.json",
+        "public/index.html",
+        "public/vite.svg",
+        "public/script.js",
+        "src/App.tsx",
+        "src/main.tsx",
+        "src/index.css",
+        "src/app.module.ts",
+        "src/main.ts",
+        "src/App.css",
+        "src/assets/react.svg",
+        "src/time/time.service.ts",
+        "src/time/time.controller.ts"
+      ],
+      "edges": [
+        {
+          "from": "src/App.tsx",
+          "to": "src/assets/react.svg",
+          "type": "imports"
+        },
+        {
+          "from": "src/App.tsx",
+          "to": "src/App.css",
+          "type": "imports"
+        },
+        {
+          "from": "src/main.tsx",
+          "to": "src/index.css",
+          "type": "imports"
+        },
+        {
+          "from": "src/main.tsx",
+          "to": "src/App.tsx",
+          "type": "imports"
+        }
+      ]
+    },
+    "dependency_graph": {
+      "dependencies": [
+        {
+          "name": "@nestjs/common",
+          "version": "^10.3.5",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "@nestjs/core",
+          "version": "^10.3.5",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "@nestjs/platform-express",
+          "version": "^10.3.5",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "@nestjs/serve-static",
+          "version": "^10.3.5",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "reflect-metadata",
+          "version": "^0.1.13",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "rxjs",
+          "version": "^7.9.1",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "@nestjs/cli",
+          "version": "^10.3.5",
+          "source": "npm",
+          "scope": "devDependencies"
+        },
+        {
+          "name": "@nestjs/schematics",
+          "version": "^10.3.5",
+          "source": "npm",
+          "scope": "devDependencies"
+        },
+        {
+          "name": "@types/node",
+          "version": "^20.13.2",
+          "source": "npm",
+          "scope": "devDependencies"
+        },
+        {
+          "name": "ts-node",
+          "version": "^10.9.1",
+          "source": "npm",
+          "scope": "devDependencies"
+        },
+        {
+          "name": "typescript",
+          "version": "~5.9.3",
+          "source": "npm",
+          "scope": "devDependencies"
+        }
+      ]
+    },
+    "entrypoints": [
+      {
+        "path": "src/main.tsx",
+        "score": 0.8,
+        "reasons": [
+          "known_entry_basename",
+          "entrypoint_like_name"
+        ],
+        "aliases": [
+          "src/App.tsx",
+          "src/index.css",
+          "src/app.module.ts",
+          "src/main.ts",
+          "src/App.css"
+        ]
+      },
+      {
+        "path": "src/main.ts",
+        "score": 0.8,
+        "reasons": [
+          "known_entry_basename",
+          "entrypoint_like_name"
+        ],
+        "aliases": [
+          "src/App.tsx",
+          "src/main.tsx",
+          "src/index.css",
+          "src/app.module.ts",
+          "src/App.css"
+        ]
+      },
+      {
+        "path": "src/App.tsx",
+        "score": 0.13,
+        "reasons": [
+          "entrypoint_like_name",
+          "import_graph"
+        ],
+        "aliases": [
+          "src/main.tsx",
+          "src/index.css",
+          "src/app.module.ts",
+          "src/main.ts",
+          "src/App.css"
+        ]
+      },
+      {
+        "path": "src/index.css",
+        "score": 0.13,
+        "reasons": [
+          "entrypoint_like_name",
+          "import_graph"
+        ],
+        "aliases": [
+          "src/App.tsx",
+          "src/main.tsx",
+          "src/app.module.ts",
+          "src/main.ts",
+          "src/App.css"
+        ]
+      },
+      {
+        "path": "src/App.css",
+        "score": 0.13,
+        "reasons": [
+          "entrypoint_like_name",
+          "import_graph"
+        ],
+        "aliases": [
+          "src/App.tsx",
+          "src/main.tsx",
+          "src/index.css",
+          "src/app.module.ts",
+          "src/main.ts"
+        ]
+      },
+      {
+        "path": "index.html",
+        "score": 0.1,
+        "reasons": [
+          "entrypoint_like_name"
+        ]
+      },
+      {
+        "path": "public/index.html",
+        "score": 0.1,
+        "reasons": [
+          "entrypoint_like_name"
+        ]
+      },
+      {
+        "path": "src/app.module.ts",
+        "score": 0.1,
+        "reasons": [
+          "entrypoint_like_name"
+        ],
+        "aliases": [
+          "src/App.tsx",
+          "src/main.tsx",
+          "src/index.css",
+          "src/main.ts",
+          "src/App.css"
+        ]
+      },
+      {
+        "path": "src/assets/react.svg",
+        "score": 0.03,
+        "reasons": [
+          "import_graph"
+        ]
+      }
+    ],
+    "entrypoint_aliases": {
+      "": [
+        "index.html"
+      ],
+      "public": [
+        "public/index.html"
+      ],
+      "src": [
+        "src/App.tsx",
+        "src/main.tsx",
+        "src/index.css",
+        "src/app.module.ts",
+        "src/main.ts",
+        "src/App.css"
+      ]
+    },
+    "tests": [],
+    "test_mappings": [],
+    "configs": [
+      "package.json",
+      "tsconfig.json",
+      "vite.config.ts"
+    ],
+    "toolchain": [
+      {
+        "name": "node",
+        "confidence": 0.9
+      }
+    ],
+    "path_aliases": {},
+    "architecture_signals": [
+      {
+        "name": "unknown",
+        "confidence": 0.4
+      }
+    ],
+    "resolution_hints": {
+      "by_basename": {
+        "readme.md": [
+          "README.md"
+        ],
+        "tsconfig.node.json": [
+          "tsconfig.node.json"
+        ],
+        "vite.config.ts": [
+          "vite.config.ts"
+        ],
+        "index.html": [
+          "index.html",
+          "public/index.html"
+        ],
+        "eslint.config.js": [
+          "eslint.config.js"
+        ],
+        "tsconfig.json": [
+          "tsconfig.json"
+        ],
+        "package-lock.json": [
+          "package-lock.json"
+        ],
+        ".gitignore": [
+          ".gitignore"
+        ],
+        "package.json": [
+          "package.json"
+        ],
+        "tsconfig.app.json": [
+          "tsconfig.app.json"
+        ],
+        "vite.svg": [
+          "public/vite.svg"
+        ],
+        "script.js": [
+          "public/script.js"
+        ],
+        "app.tsx": [
+          "src/App.tsx"
+        ],
+        "main.tsx": [
+          "src/main.tsx"
+        ],
+        "index.css": [
+          "src/index.css"
+        ],
+        "app.module.ts": [
+          "src/app.module.ts"
+        ],
+        "main.ts": [
+          "src/main.ts"
+        ],
+        "app.css": [
+          "src/App.css"
+        ],
+        "react.svg": [
+          "src/assets/react.svg"
+        ],
+        "time.service.ts": [
+          "src/time/time.service.ts"
+        ],
+        "time.controller.ts": [
+          "src/time/time.controller.ts"
+        ]
+      },
+      "entrypoint_candidates": [
+        {
+          "path": "src/main.tsx",
+          "score": 0.8
+        },
+        {
+          "path": "src/main.ts",
+          "score": 0.8
+        },
+        {
+          "path": "src/App.tsx",
+          "score": 0.13
+        },
+        {
+          "path": "src/index.css",
+          "score": 0.13
+        },
+        {
+          "path": "src/App.css",
+          "score": 0.13
+        },
+        {
+          "path": "index.html",
+          "score": 0.1
+        },
+        {
+          "path": "public/index.html",
+          "score": 0.1
+        },
+        {
+          "path": "src/app.module.ts",
+          "score": 0.1
+        },
+        {
+          "path": "src/assets/react.svg",
+          "score": 0.03
+        }
+      ],
+      "entrypoint_aliases": {
+        "": [
+          "index.html"
+        ],
+        "public": [
+          "public/index.html"
+        ],
+        "src": [
+          "src/App.tsx",
+          "src/main.tsx",
+          "src/index.css",
+          "src/app.module.ts",
+          "src/main.ts",
+          "src/App.css"
+        ]
+      },
+      "ai_ranked_candidates": [
+        {
+          "path": "src/main.tsx",
+          "score": 0.8,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "src/main.ts",
+          "score": 0.8,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "src/App.tsx",
+          "score": 0.13,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "src/index.css",
+          "score": 0.13,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "src/App.css",
+          "score": 0.13,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "index.html",
+          "score": 0.1,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "public/index.html",
+          "score": 0.1,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "src/app.module.ts",
+          "score": 0.1,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "src/assets/react.svg",
+          "score": 0.03,
+          "reason": "ai_fallback_ranked"
+        }
+      ]
+    }
+  }
+}
