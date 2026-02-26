@@ -95,7 +95,7 @@ class PMHandoffStoreTests(unittest.TestCase):
         self.assertEqual(metadata[0].get("file_name"), "src/main.tsx")
         self.assertTrue(metadata[0].get("entrypoint_candidate"))
 
-    def test_handoff_normalizes_redundant_vite_target_path(self) -> None:
+    def test_handoff_preserves_command_text_without_scaffold_recipes(self) -> None:
         plan = self._sample_plan()
         plan["bootstrap_commands"] = [
             {
@@ -108,7 +108,7 @@ class PMHandoffStoreTests(unittest.TestCase):
         self.assertEqual(len(handoff.get("execution_steps", [])), 1)
         step = handoff["execution_steps"][0]
         self.assertEqual(step["cwd"], "projects/calculator")
-        self.assertIn("npm create vite@latest .", step["command"])
+        self.assertEqual(step["command"], "npm create vite@latest projects/calculator -- --template react-ts")
 
     def test_handoff_normalizes_redundant_vite_target_path_with_npm_init(self) -> None:
         plan = self._sample_plan()
@@ -124,7 +124,7 @@ class PMHandoffStoreTests(unittest.TestCase):
         step = handoff["execution_steps"][0]
         self.assertTrue(step["command"].startswith("npm init vite@latest"))
 
-    def test_handoff_normalizes_empty_cwd_for_scaffold_target(self) -> None:
+    def test_handoff_normalizes_empty_cwd_to_project_root(self) -> None:
         plan = self._sample_plan()
         plan["bootstrap_commands"] = [
             {
@@ -136,7 +136,7 @@ class PMHandoffStoreTests(unittest.TestCase):
         handoff = build_dev_handoff(request_id="req-handoff-4", plan=plan, rounds=[])
         self.assertEqual(len(handoff.get("execution_steps", [])), 1)
         step = handoff["execution_steps"][0]
-        self.assertEqual(step["cwd"], "projects")
+        self.assertEqual(step["cwd"], "projects/calculator")
 
 
 if __name__ == "__main__":

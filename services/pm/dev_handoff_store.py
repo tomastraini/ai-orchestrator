@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import hashlib
-import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -83,51 +82,6 @@ def _normalize_execution_step(
     cwd: str,
     purpose: str,
 ) -> Dict[str, str]:
-    def _relativize_scaffold_target(token: str, cwd_norm: str, project_root_norm: str) -> str:
-        target = token.strip().replace("\\", "/").lstrip("./")
-        project_name = project_root_norm.split("/")[-1] if project_root_norm else ""
-        cwd_name = cwd_norm.split("/")[-1] if cwd_norm else ""
-        if not target.startswith("projects/"):
-            if project_name and cwd_norm == project_root_norm and target == project_name:
-                return "."
-            if cwd_name and target == cwd_name:
-                return "."
-            return token
-        if target == cwd_norm or target == project_root_norm:
-            return "."
-        if cwd_norm and target.startswith(f"{cwd_norm}/"):
-            return target[len(cwd_norm) + 1 :] or "."
-        if project_root_norm and target.startswith(f"{project_root_norm}/") and cwd_norm == project_root_norm:
-            return target[len(project_root_norm) + 1 :] or "."
-        return token
-
-    def _normalize_scaffold_target_arg(cmd_str: str, cwd_norm: str, project_root_norm: str) -> str:
-        tokens = cmd_str.split()
-        low_tokens = [t.lower() for t in tokens]
-        if not tokens:
-            return cmd_str
-
-        # create-react-app <target>
-        if any("create-react-app" in t for t in low_tokens):
-            for i, tok in enumerate(low_tokens):
-                if "create-react-app" in tok and len(tokens) > i + 1:
-                    tokens[i + 1] = _relativize_scaffold_target(tokens[i + 1], cwd_norm, project_root_norm)
-                    return " ".join(tokens)
-
-        # create-vite <target> OR npm create vite@latest <target>
-        if any("create-vite" in t for t in low_tokens):
-            for i, tok in enumerate(low_tokens):
-                if "create-vite" in tok and len(tokens) > i + 1 and not tokens[i + 1].startswith("-"):
-                    tokens[i + 1] = _relativize_scaffold_target(tokens[i + 1], cwd_norm, project_root_norm)
-                    return " ".join(tokens)
-        if ("create" in low_tokens or "init" in low_tokens) and any("vite" in t for t in low_tokens):
-            for i, tok in enumerate(low_tokens):
-                if (tok == "create" or tok == "init") and len(tokens) > i + 2 and "vite" in low_tokens[i + 1]:
-                    if not tokens[i + 2].startswith("-"):
-                        tokens[i + 2] = _relativize_scaffold_target(tokens[i + 2], cwd_norm, project_root_norm)
-                        return " ".join(tokens)
-        return cmd_str
-
     cmd = command.strip()
     low = cmd.lower()
 
@@ -147,15 +101,11 @@ def _normalize_execution_step(
 
     raw_cwd = str(cwd or "").strip()
     normalized_cwd = raw_cwd if raw_cwd else "."
-    if not raw_cwd and re.search(r"\bprojects/[A-Za-z0-9._-]+\b", cmd):
-        normalized_cwd = "projects"
     if normalized_cwd in {"", ".", "./"}:
         normalized_cwd = project_root
     if normalized_cwd.startswith("./"):
         normalized_cwd = normalized_cwd[2:]
     normalized_cwd = _normalize_projects_path(normalized_cwd, project_root)
-    cmd = _normalize_scaffold_target_arg(cmd, normalized_cwd, project_root)
-    low = cmd.lower()
 
     return {
         "cwd": normalized_cwd,

@@ -133,17 +133,6 @@ def _normalize_existing_project_plan(
     return plan
 
 
-def _looks_like_scaffold_command(command: str) -> bool:
-    low = (command or "").lower()
-    return (
-        "create-react-app" in low
-        or "create-vite" in low
-        or ("npm create" in low and "vite" in low)
-        or ("npm init" in low and "vite" in low)
-        or ("dotnet new" in low)
-    )
-
-
 def _normalize_bootstrap_commands(plan: Dict[str, Any]) -> Dict[str, Any]:
     commands = plan.get("bootstrap_commands")
     if not isinstance(commands, list):
@@ -159,12 +148,7 @@ def _normalize_bootstrap_commands(plan: Dict[str, Any]) -> Dict[str, Any]:
         command = str(raw.get("command", "")).strip()
         purpose = str(raw.get("purpose", "bootstrap")).strip() or "bootstrap"
         if not cwd:
-            if _looks_like_scaffold_command(command) and re.search(r"\bprojects/[A-Za-z0-9._-]+\b", command):
-                cwd = "projects"
-            elif _looks_like_scaffold_command(command):
-                cwd = project_root
-            else:
-                cwd = project_root
+            cwd = project_root
         cwd = canonical_projects_path(cwd, project_root)
         normalized.append({"cwd": cwd, "command": command, "purpose": purpose})
     plan["bootstrap_commands"] = normalized

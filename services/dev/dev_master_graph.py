@@ -629,78 +629,6 @@ class DevMasterGraph:
         return True
 
     @staticmethod
-    def _intent_tech_tokens(state: DevGraphState) -> Set[str]:
-        plan = state.get("plan", {}) if isinstance(state.get("plan"), dict) else {}
-        texts: List[str] = [str(plan.get("summary", ""))]
-        stack = plan.get("stack", {}) if isinstance(plan.get("stack"), dict) else {}
-        texts.extend(
-            [
-                str(stack.get("frontend", "")),
-                str(stack.get("backend", "")),
-                " ".join([str(x) for x in stack.get("language_preferences", []) if isinstance(x, str)]),
-            ]
-        )
-        for key in ["target_intents", "target_files"]:
-            for item in plan.get(key, []) if isinstance(plan.get(key), list) else []:
-                if isinstance(item, dict):
-                    texts.extend([str(v) for v in item.values() if isinstance(v, (str, int, float))])
-        blob = " ".join(texts).lower()
-        token_map = {
-            "react": ["react", "jsx", "tsx"],
-            "vue": ["vue"],
-            "angular": ["angular"],
-            "nest": ["nestjs", "nest "],
-            "dotnet": ["dotnet", ".net", "asp.net", "c#"],
-            "kotlin": ["kotlin", "gradle", "kt"],
-            "visual_basic": ["visual basic", "vb.net", "vb "],
-            "python": ["python", "django", "flask", "fastapi", "pytest"],
-            "node": ["node", "javascript", "typescript", "npm", "pnpm", "yarn"],
-        }
-        detected: Set[str] = set()
-        for family, needles in token_map.items():
-            if any(needle in blob for needle in needles):
-                detected.add(family)
-        return detected
-
-    @staticmethod
-    def _command_tech_tokens(command: str) -> Set[str]:
-        low = f" {str(command or '').lower()} "
-        token_map = {
-            "react": [" react ", "create-react-app", "react-ts", "jsx", "tsx"],
-            "vue": [" vue ", "create-vue"],
-            "angular": [" angular ", "ng new", "@angular"],
-            "nest": [" nest ", "@nestjs", "nest build"],
-            "dotnet": [" dotnet ", ".sln", ".csproj"],
-            "kotlin": [" kotlin ", "gradle", "gradlew"],
-            "visual_basic": [" visual basic ", " vb ", "vb.net"],
-        }
-        detected: Set[str] = set()
-        for family, needles in token_map.items():
-            if any(needle in low for needle in needles):
-                detected.add(family)
-        if any(tok in low for tok in [" npm ", " pnpm ", " yarn ", " node "]):
-            detected.add("node")
-        return detected
-
-    @staticmethod
-    def _violates_intent_purity(state: DevGraphState, command: str) -> Tuple[bool, Dict[str, Any]]:
-        intent_tokens = DevMasterGraph._intent_tech_tokens(state)
-        command_tokens = DevMasterGraph._command_tech_tokens(command)
-        specific_command_tokens = {x for x in command_tokens if x not in {"node"}}
-        specific_intent_tokens = {x for x in intent_tokens if x not in {"node"}}
-        if not specific_command_tokens:
-            return False, {"intent_tokens": sorted(intent_tokens), "command_tokens": sorted(command_tokens)}
-        if not intent_tokens:
-            return False, {"intent_tokens": [], "command_tokens": sorted(command_tokens)}
-        overlap = specific_intent_tokens.intersection(specific_command_tokens)
-        violates = len(overlap) == 0
-        return violates, {
-            "intent_tokens": sorted(intent_tokens),
-            "command_tokens": sorted(command_tokens),
-            "overlap": sorted(overlap),
-        }
-
-    @staticmethod
     def _extract_deterministic_failure_signatures(attempt_history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         signatures: Dict[str, Dict[str, Any]] = {}
         for attempt in attempt_history:
@@ -744,19 +672,17 @@ class DevMasterGraph:
         for attempt in attempts:
             key = f"{attempt.get('task_id','')}::{attempt.get('category','')}::{str(attempt.get('stderr',''))[:120]}"
             signatures[key] = signatures.get(key, 0) + 1
-        repeated_no_progress = any(count >= 3 for count in signatures.values())
         criteria = {
             "integrity_compromised": any(
                 tok in errors_blob for tok in ["escapes scope", "policy violation", "unsafe", "blocked command"]
             ),
             "llm_budget_exhausted": "llm model-call budget reached" in errors_blob or "llm budget" in errors_blob,
-            "no_progress_loop": repeated_no_progress,
         }
-        approved = bool(criteria["integrity_compromised"] or criteria["llm_budget_exhausted"] or criteria["no_progress_loop"])
+        approved = bool(criteria["integrity_compromised"] or criteria["llm_budget_exhausted"])
         criterion = (
             "integrity_compromised"
             if criteria["integrity_compromised"]
-            else ("llm_budget_exhausted" if criteria["llm_budget_exhausted"] else ("no_progress_loop" if criteria["no_progress_loop"] else "none"))
+            else ("llm_budget_exhausted" if criteria["llm_budget_exhausted"] else "none")
         )
         return {"approved": approved, "criterion": criterion, "criteria": criteria, "attempt_signatures": signatures}
 
@@ -1586,30 +1512,6 @@ class DevMasterGraph:
         pending_llm_task = None
         errors: List[str] = []
         for task in bootstrap_tasks:
-            violates_purity, purity_evidence = DevMasterGraph._violates_intent_purity(
-                state, str(task.command or "")
-            )
-            if violates_purity:
-                msg = (
-                    f"[INTENT_PURITY_BLOCK] bootstrap task={task.id} command='{task.command}' "
-                    f"introduces unrequested stack tokens."
-                )
-                errors.append(msg)
-                DevMasterGraph._emit_event(
-                    state,
-                    "intent_purity_blocked",
-                    phase="bootstrap",
-                    task_id=task.id,
-                    command=str(task.command or ""),
-                    evidence=purity_evidence,
-                )
-                DevMasterGraph._set_checklist_status(
-                    state,
-                    f"todo_{task.id}",
-                    "blocked",
-                    evidence={"phase": "bootstrap", "reason": "intent_purity_blocked", "details": purity_evidence},
-                )
-                break
             logs, touched_paths, task_errors, attempt_history, task_pending_llm, outcomes = execute_dev_tasks(
                 [task],
                 scope_root=state["scope_root"],
@@ -2990,12 +2892,6 @@ class DevMasterGraph:
                 if cmd_low in attempted_commands_lower:
                     rejected_recovery.append({"command": cmd, "reason": "identical_command_without_new_evidence"})
                     continue
-                violates_purity, purity_evidence = DevMasterGraph._violates_intent_purity(state, cmd)
-                if violates_purity:
-                    rejected_recovery.append(
-                        {"command": cmd, "reason": "intent_purity_blocked", "evidence": purity_evidence}
-                    )
-                    continue
                 filtered_recovery_commands.append(cmd)
             if rejected_recovery:
                 DevMasterGraph._emit_event(
@@ -3048,6 +2944,14 @@ class DevMasterGraph:
                     state["phase_status"]["execute_final_compile_gate"] = "completed"
                     DevMasterGraph._emit(state, "[FINAL_COMPILE] recovered")
                     return state
+                DevMasterGraph._emit_event(
+                    state,
+                    "failure_replanned",
+                    phase="final_compile",
+                    reason="recovery_attempt_failed",
+                    attempted_commands=[str(t.command) for t in recovery_tasks],
+                    retryable=True,
+                )
             else:
                 state["capability_gaps"] = list(state.get("capability_gaps", [])) + [
                     {
@@ -3057,6 +2961,14 @@ class DevMasterGraph:
                         "errors": errors[-2:],
                     }
                 ]
+                DevMasterGraph._emit_event(
+                    state,
+                    "failure_replanned",
+                    phase="final_compile",
+                    reason="no_safe_recovery_command",
+                    retryable=True,
+                    taxonomy=taxonomy,
+                )
             if compile_error_file_refs:
                 state["errors"].append(
                     "[RECOVERABLE_CONTEXT_GAP] final compile failed with file-level diagnostics; "
@@ -3065,6 +2977,13 @@ class DevMasterGraph:
             state["errors"].extend(errors)
             state["final_compile_status"] = "failed"
             state["phase_status"]["execute_final_compile_gate"] = "failed"
+            DevMasterGraph._emit_event(
+                state,
+                "degraded_continue",
+                phase="final_compile",
+                status="failed_non_terminal",
+                next_action="continue_with_partial_progress",
+            )
             DevMasterGraph._emit(state, "[FINAL_COMPILE] failed")
             return state
 

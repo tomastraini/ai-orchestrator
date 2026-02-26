@@ -66,6 +66,19 @@ class TerminalFailureGateTests(unittest.TestCase):
             msg=str(events),
         )
 
+    def test_terminal_gate_does_not_approve_no_progress_alone(self) -> None:
+        gate = DevMasterGraph._terminal_failure_gate(
+            {
+                "errors": ["compile failed repeatedly"],
+                "attempt_history": [
+                    {"task_id": "t1", "category": "unknown", "stderr": "same error"},
+                    {"task_id": "t1", "category": "unknown", "stderr": "same error"},
+                    {"task_id": "t1", "category": "unknown", "stderr": "same error"},
+                ],
+            }
+        )
+        self.assertFalse(bool(gate.get("approved")), msg=str(gate))
+
 
 if __name__ == "__main__":
     unittest.main()

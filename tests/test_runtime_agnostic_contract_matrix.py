@@ -41,22 +41,10 @@ class RuntimeAgnosticContractMatrixTests(unittest.TestCase):
             tasks = DevMasterGraph._infer_bootstrap_tasks_from_intent(state)  # type: ignore[arg-type]
             self.assertEqual(tasks, [])
 
-    def test_intent_purity_blocks_unrequested_framework_commands(self) -> None:
-        vue_state = self._state_for_intent(
-            "Build Vue UI with dotnet API backend.",
-            "Vue",
-            ".NET",
-            ["TypeScript", "C#"],
-        )
-        blocked, evidence = DevMasterGraph._violates_intent_purity(
-            vue_state, "npm create vite@latest app -- --template react-ts"  # type: ignore[arg-type]
-        )
-        self.assertTrue(blocked, msg=str(evidence))
-
-        allowed, evidence = DevMasterGraph._violates_intent_purity(
-            vue_state, "dotnet build"  # type: ignore[arg-type]
-        )
-        self.assertFalse(allowed, msg=str(evidence))
+    def test_runtime_has_no_hardcoded_intent_purity_token_gate(self) -> None:
+        self.assertFalse(hasattr(DevMasterGraph, "_intent_tech_tokens"))
+        self.assertFalse(hasattr(DevMasterGraph, "_command_tech_tokens"))
+        self.assertFalse(hasattr(DevMasterGraph, "_violates_intent_purity"))
 
 
 if __name__ == "__main__":
