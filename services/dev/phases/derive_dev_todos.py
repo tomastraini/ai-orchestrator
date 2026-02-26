@@ -33,17 +33,11 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
     elif isinstance(handoff_steps, list) and len(handoff_steps) > 0:
         graph_cls._emit(state, "[TODO] ignoring PM-authored execution_steps; DEV will infer bootstrap commands")
     else:
-        for i, cmd in enumerate(plan.get("bootstrap_commands", []), start=1):
-            if isinstance(cmd, dict):
-                bootstrap_tasks.append(
-                    DevTask(
-                        id=f"bootstrap_{i}",
-                        description=str(cmd.get("purpose", "bootstrap step")),
-                        command=str(cmd.get("command", "")),
-                        cwd=str(cmd.get("cwd", ".")),
-                        kind="bootstrap",
-                    )
-                )
+        if isinstance(plan.get("bootstrap_commands"), list) and len(plan.get("bootstrap_commands", [])) > 0:
+            graph_cls._emit(
+                state,
+                "[TODO] ignoring plan.bootstrap_commands; DEV runtime owns executable command synthesis",
+            )
     if not bootstrap_tasks and hasattr(graph_cls, "_infer_bootstrap_tasks_from_intent"):
         inferred = graph_cls._infer_bootstrap_tasks_from_intent(state)
         if isinstance(inferred, list):

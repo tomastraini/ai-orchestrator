@@ -7,31 +7,26 @@ from services.dev.command_policy import detect_stack_from_command, normalize_com
 
 
 def is_likely_long_running_command(command: str) -> bool:
-    low = f" {str(command or '').lower()} "
-    tokens = [
-        " npm run dev ",
-        " npm start ",
-        " pnpm dev ",
-        " yarn dev ",
-        " vite ",
-        " next dev ",
-        " flask run ",
-        " uvicorn ",
-        " rails server ",
-        " dotnet watch ",
-    ]
-    return any(token in low for token in tokens)
+    low = str(command or "").lower()
+    return any(
+        hint in low
+        for hint in [" run dev", " start", " serve", " watch", " --watch", " --live-reload", " server"]
+    )
 
 
 def classify_failure(stdout: str, stderr: str, exit_code: int) -> str:
     text = f"{stdout}\n{stderr}".lower()
     if "ok to proceed?" in text or "npm error canceled" in text or "prompt" in text:
         return "interactive_prompt"
-    if "not recognized as an internal or external command" in text or "command not found" in text:
+    if (
+        "not recognized as an internal or external command" in text
+        or "command not found" in text
+        or "not found" in text
+    ):
         return "command_not_found"
     if "no such file or directory" in text or "cannot find the path specified" in text:
         return "path_issue"
-    if "package manager" in text or "npm" in text or "yarn" in text or "pnpm" in text:
+    if exit_code != 0 and any(tok in text for tok in ["package manager mismatch", "unsupported package manager", "unknown package manager"]):
         return "package_manager_mismatch"
     if exit_code != 0:
         return "unknown"
@@ -85,60 +80,15 @@ def rewrite_command_deterministic(
         except Exception:
             cwd_rel = ""
 
-    if "create-react-app" in low:
-        parts = cmd.split()
-        try:
-            idx = next(i for i, tok in enumerate(parts) if "create-react-app" in tok.lower())
-            if len(parts) > idx + 1:
-                parts[idx + 1] = _normalize_projects_target_token(parts[idx + 1], cwd_rel or ".")
-                cmd = " ".join(parts)
-                low = cmd.lower()
-        except StopIteration:
-            pass
-        if "--use-npm" not in low:
-            cmd = f"{cmd} --use-npm"
-        return cmd
-
-    if "create-vite" in low or ("npm create" in low and "vite" in low) or ("npm init" in low and "vite" in low):
-        parts = cmd.split()
-        target_idx = -1
-        if any("create-vite" in tok.lower() for tok in parts):
-            for i, tok in enumerate(parts):
-                if "create-vite" in tok.lower():
-                    if len(parts) > i + 1 and not parts[i + 1].startswith("-"):
-                        target_idx = i + 1
-                    break
-        else:
-            for i, tok in enumerate(parts):
-                if (tok.lower() == "create" or tok.lower() == "init") and len(parts) > i + 2:
-                    candidate_tool = parts[i + 1].lower()
-                    candidate_target = parts[i + 2]
-                    if "vite" in candidate_tool and not candidate_target.startswith("-"):
-                        target_idx = i + 2
-                        break
-        if target_idx >= 0:
-            parts[target_idx] = _normalize_projects_target_token(parts[target_idx], cwd_rel or ".")
-            cmd = " ".join(parts)
-        return normalize_command_for_stack(normalize_non_interactive(cmd), stack_hint)
-
-    if "nest new" in low and "@nestjs/cli" not in low:
-        parts = cmd.split()
-        app_name = "app"
-        if len(parts) >= 3:
-            app_name = parts[2]
-        return f"npx @nestjs/cli new {app_name} --package-manager npm --skip-git"
-
-    if "@nestjs/cli new" in low:
-        if "--package-manager" not in low:
-            cmd = f"{cmd} --package-manager npm"
-        if "--skip-git" not in low:
-            cmd = f"{cmd} --skip-git"
-        return cmd
+    parts = cmd.split()
+    for i, tok in enumerate(parts):
+        if tok.strip().replace("\\", "/").lstrip("./").startswith("projects/"):
+            parts[i] = _normalize_projects_target_token(parts[i], cwd_rel or ".")
+    cmd = " ".join(parts) if parts else cmd
+    low = cmd.lower()
 
     if category == "interactive_prompt":
-        if low.startswith("npx ") and "--yes" not in low:
-            return f"npx --yes {cmd[4:].strip()}"
-        if " npm " in f" {low} " and "--yes" not in low:
+        if "--yes" not in low and "--force" not in low:
             return f"{cmd} --yes"
 
     inferred = stack_hint or detect_stack_from_command(command)

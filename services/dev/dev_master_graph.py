@@ -5,6 +5,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import time
 from dataclasses import asdict
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -427,53 +428,148 @@ class DevMasterGraph:
 
     @staticmethod
     def _infer_bootstrap_tasks_from_intent(state: DevGraphState) -> List[DevTask]:
-        plan = state.get("plan", {}) if isinstance(state.get("plan"), dict) else {}
-        if not isinstance(plan.get("target_intents"), list):
-            # Backward-compatible guard: only infer when PM provides intent metadata.
-            return []
-        project_mode = str(plan.get("project_mode", "")).strip().lower()
-        if project_mode != "new_project":
-            return []
-        project_root = str(state.get("project_root", f"projects/{state.get('project_name', 'project')}"))
-        project_name = str(state.get("project_name", "project")).strip() or "project"
-        stack = plan.get("stack", {}) if isinstance(plan.get("stack"), dict) else {}
-        frontend = str(stack.get("frontend", "")).lower()
-        backend = str(stack.get("backend", "")).lower()
-        lang_prefs = " ".join([str(x).lower() for x in stack.get("language_preferences", []) if isinstance(x, str)])
-        stack_hint = " ".join([frontend, backend, lang_prefs]).strip()
+        # Runtime policy: do not enforce a prescribed scaffolding workflow.
+        # DEV may still execute explicit commands from DEV-authored handoffs,
+        # but PM intent alone should not auto-expand into fixed scaffold recipes.
+        _ = state
+        return []
 
-        tasks: List[DevTask] = []
-        if any(tok in stack_hint for tok in ["react", "vite", "typescript", "javascript", "node"]):
-            tasks.append(
-                DevTask(
-                    id="bootstrap_inferred_1",
-                    description="infer scaffold command from PM intent",
-                    command=f"npm create vite@latest {project_name} -- --template react-ts",
-                    cwd="projects",
-                    kind="bootstrap",
-                )
-            )
-            tasks.append(
-                DevTask(
-                    id="bootstrap_inferred_2",
-                    description="install dependencies in project root",
-                    command="npm install",
-                    cwd=project_root,
-                    kind="bootstrap",
-                )
-            )
-            return tasks
-        if any(tok in stack_hint for tok in ["python", "django", "flask", "fastapi"]):
-            tasks.append(
-                DevTask(
-                    id="bootstrap_inferred_1",
-                    description="ensure python project root exists",
-                    command="python -c \"print('bootstrap ready')\"",
-                    cwd=project_root,
-                    kind="bootstrap",
-                )
-            )
-        return tasks
+    @staticmethod
+    def _read_package_scripts(project_dir: str) -> Dict[str, str]:
+        package_json = os.path.join(project_dir, "package.json")
+        if not os.path.exists(package_json):
+            return {}
+        try:
+            with open(package_json, "r", encoding="utf-8", errors="ignore") as fh:
+                payload = json.load(fh)
+        except Exception:
+            return {}
+        scripts = payload.get("scripts", {}) if isinstance(payload, dict) else {}
+        if not isinstance(scripts, dict):
+            return {}
+        normalized: Dict[str, str] = {}
+        for key, value in scripts.items():
+            k = str(key).strip()
+            v = str(value).strip()
+            if k and v:
+                normalized[k] = v
+        return normalized
+
+    @staticmethod
+    def _infer_node_runner(project_dir: str) -> str:
+        if os.path.exists(os.path.join(project_dir, "pnpm-lock.yaml")):
+            return "pnpm"
+        if os.path.exists(os.path.join(project_dir, "yarn.lock")):
+            return "yarn"
+        return "npm"
+
+    @staticmethod
+    def _discover_repository_command_candidates(project_dir: str) -> Dict[str, List[str]]:
+        candidates: Dict[str, List[str]] = {"build": [], "test": [], "lint": [], "check": [], "setup": []}
+
+        def _add(kind: str, command: str) -> None:
+            cmd = str(command or "").strip()
+            if not cmd:
+                return
+            bucket = candidates.setdefault(kind, [])
+            if cmd not in bucket:
+                bucket.append(cmd)
+
+        scripts = DevMasterGraph._read_package_scripts(project_dir)
+        if scripts:
+            runner = DevMasterGraph._infer_node_runner(project_dir)
+            for script_name in scripts:
+                if script_name in {"build", "compile"}:
+                    _add("build", f"{runner} run {script_name}")
+                if script_name in {"test", "unit", "integration"} or script_name.startswith("test:"):
+                    _add("test", f"{runner} run {script_name}")
+                if script_name in {"lint", "eslint"} or script_name.startswith("lint:"):
+                    _add("lint", f"{runner} run {script_name}")
+                if script_name in {"check", "typecheck"} or script_name.startswith("check:"):
+                    _add("check", f"{runner} run {script_name}")
+            _add("setup", f"{runner} install")
+
+        if os.path.exists(os.path.join(project_dir, "Makefile")):
+            try:
+                with open(os.path.join(project_dir, "Makefile"), "r", encoding="utf-8", errors="ignore") as fh:
+                    blob = fh.read().lower()
+                if re.search(r"^build\s*:", blob, flags=re.MULTILINE):
+                    _add("build", "make build")
+                if re.search(r"^test\s*:", blob, flags=re.MULTILINE):
+                    _add("test", "make test")
+                if re.search(r"^lint\s*:", blob, flags=re.MULTILINE):
+                    _add("lint", "make lint")
+            except Exception:
+                pass
+
+        entries: List[str] = []
+        try:
+            entries = os.listdir(project_dir)
+        except Exception:
+            entries = []
+
+        if any(str(x).endswith((".sln", ".csproj")) for x in entries):
+            _add("setup", "dotnet restore")
+            _add("build", "dotnet build")
+            _add("test", "dotnet test")
+        if os.path.exists(os.path.join(project_dir, "Cargo.toml")):
+            _add("build", "cargo build")
+            _add("test", "cargo test")
+        if os.path.exists(os.path.join(project_dir, "go.mod")):
+            _add("build", "go build ./...")
+            _add("test", "go test ./...")
+        if os.path.exists(os.path.join(project_dir, "gradlew")):
+            _add("build", "./gradlew build")
+            _add("test", "./gradlew test")
+        elif os.path.exists(os.path.join(project_dir, "build.gradle")) or os.path.exists(os.path.join(project_dir, "build.gradle.kts")):
+            _add("build", "gradle build")
+            _add("test", "gradle test")
+        if os.path.exists(os.path.join(project_dir, "pyproject.toml")) or os.path.exists(os.path.join(project_dir, "requirements.txt")):
+            _add("test", "python -m pytest")
+            if os.path.exists(os.path.join(project_dir, "requirements.txt")):
+                _add("setup", "python -m pip install -r requirements.txt")
+
+        return candidates
+
+    @staticmethod
+    def _is_validation_command_executable(command: str, *, project_dir: str) -> Tuple[bool, str]:
+        cmd = str(command or "").strip()
+        low = cmd.lower()
+        scripts = DevMasterGraph._read_package_scripts(project_dir)
+        if low.startswith("npm run ") or low.startswith("pnpm run ") or low.startswith("yarn run "):
+            parts = cmd.split()
+            script_name = parts[2] if len(parts) >= 3 else ""
+            if not os.path.exists(os.path.join(project_dir, "package.json")):
+                return False, "missing_package_json"
+            if script_name and script_name not in scripts:
+                return False, f"missing_script:{script_name}"
+            return True, "ok"
+        if low.startswith("npm test") or low.startswith("pnpm test") or low.startswith("yarn test"):
+            if not os.path.exists(os.path.join(project_dir, "package.json")):
+                return False, "missing_package_json"
+            if "test" not in scripts:
+                return False, "missing_script:test"
+            return True, "ok"
+        if low.startswith("npm install") or low.startswith("pnpm install") or low.startswith("yarn install"):
+            has_package = os.path.exists(os.path.join(project_dir, "package.json"))
+            return has_package, "ok" if has_package else "missing_package_json"
+        if low.startswith("make "):
+            return os.path.exists(os.path.join(project_dir, "Makefile")), "missing_makefile"
+        if low.startswith("./"):
+            executable = cmd.split()[0]
+            if os.path.exists(os.path.join(project_dir, executable[2:])):
+                return True, "ok"
+            return False, f"missing_file:{executable}"
+        first_token = cmd.split()[0] if cmd.split() else ""
+        if first_token:
+            if shutil.which(first_token) is not None:
+                return True, "ok"
+            if os.path.exists(os.path.join(project_dir, first_token)):
+                return True, "ok"
+            if first_token in {"python", "python3"} and shutil.which("python") is not None:
+                return True, "ok"
+            return False, f"missing_capability:{first_token}"
+        return True, "ok"
 
     @staticmethod
     def _bootstrap_artifact_gate(state: DevGraphState, *, task: DevTask) -> Tuple[bool, Dict[str, Any]]:
@@ -531,6 +627,114 @@ class DevMasterGraph:
         if task_kind == "bootstrap" and any(tok in recovered for tok in ["find ", "ls ", "dir ", "rg ", "where "]):
             return False
         return True
+
+    @staticmethod
+    def _intent_tech_tokens(state: DevGraphState) -> Set[str]:
+        plan = state.get("plan", {}) if isinstance(state.get("plan"), dict) else {}
+        texts: List[str] = [str(plan.get("summary", ""))]
+        stack = plan.get("stack", {}) if isinstance(plan.get("stack"), dict) else {}
+        texts.extend(
+            [
+                str(stack.get("frontend", "")),
+                str(stack.get("backend", "")),
+                " ".join([str(x) for x in stack.get("language_preferences", []) if isinstance(x, str)]),
+            ]
+        )
+        for key in ["target_intents", "target_files"]:
+            for item in plan.get(key, []) if isinstance(plan.get(key), list) else []:
+                if isinstance(item, dict):
+                    texts.extend([str(v) for v in item.values() if isinstance(v, (str, int, float))])
+        blob = " ".join(texts).lower()
+        token_map = {
+            "react": ["react", "jsx", "tsx"],
+            "vue": ["vue"],
+            "angular": ["angular"],
+            "nest": ["nestjs", "nest "],
+            "dotnet": ["dotnet", ".net", "asp.net", "c#"],
+            "kotlin": ["kotlin", "gradle", "kt"],
+            "visual_basic": ["visual basic", "vb.net", "vb "],
+            "python": ["python", "django", "flask", "fastapi", "pytest"],
+            "node": ["node", "javascript", "typescript", "npm", "pnpm", "yarn"],
+        }
+        detected: Set[str] = set()
+        for family, needles in token_map.items():
+            if any(needle in blob for needle in needles):
+                detected.add(family)
+        return detected
+
+    @staticmethod
+    def _command_tech_tokens(command: str) -> Set[str]:
+        low = f" {str(command or '').lower()} "
+        token_map = {
+            "react": [" react ", "create-react-app", "react-ts", "jsx", "tsx"],
+            "vue": [" vue ", "create-vue"],
+            "angular": [" angular ", "ng new", "@angular"],
+            "nest": [" nest ", "@nestjs", "nest build"],
+            "dotnet": [" dotnet ", ".sln", ".csproj"],
+            "kotlin": [" kotlin ", "gradle", "gradlew"],
+            "visual_basic": [" visual basic ", " vb ", "vb.net"],
+        }
+        detected: Set[str] = set()
+        for family, needles in token_map.items():
+            if any(needle in low for needle in needles):
+                detected.add(family)
+        if any(tok in low for tok in [" npm ", " pnpm ", " yarn ", " node "]):
+            detected.add("node")
+        return detected
+
+    @staticmethod
+    def _violates_intent_purity(state: DevGraphState, command: str) -> Tuple[bool, Dict[str, Any]]:
+        intent_tokens = DevMasterGraph._intent_tech_tokens(state)
+        command_tokens = DevMasterGraph._command_tech_tokens(command)
+        specific_command_tokens = {x for x in command_tokens if x not in {"node"}}
+        specific_intent_tokens = {x for x in intent_tokens if x not in {"node"}}
+        if not specific_command_tokens:
+            return False, {"intent_tokens": sorted(intent_tokens), "command_tokens": sorted(command_tokens)}
+        if not intent_tokens:
+            return False, {"intent_tokens": [], "command_tokens": sorted(command_tokens)}
+        overlap = specific_intent_tokens.intersection(specific_command_tokens)
+        violates = len(overlap) == 0
+        return violates, {
+            "intent_tokens": sorted(intent_tokens),
+            "command_tokens": sorted(command_tokens),
+            "overlap": sorted(overlap),
+        }
+
+    @staticmethod
+    def _extract_deterministic_failure_signatures(attempt_history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        signatures: Dict[str, Dict[str, Any]] = {}
+        for attempt in attempt_history:
+            if not isinstance(attempt, dict):
+                continue
+            command = str(attempt.get("command", "")).strip()
+            category = str(attempt.get("category", "unknown")).strip() or "unknown"
+            stderr = str(attempt.get("stderr", "")).lower()
+            stdout = str(attempt.get("stdout", "")).lower()
+            if "operation cancelled" in stderr or "operation cancelled" in stdout:
+                signature = "operation_cancelled_scaffold"
+                decision_point = "bootstrap_artifact_gate"
+            elif "not found" in stderr and ("sh: " in stderr or "command not found" in stderr):
+                signature = "tool_missing_on_runtime"
+                decision_point = "capability_gate"
+            elif category in {"timeout"}:
+                signature = "timeout_without_readiness"
+                decision_point = "retry_policy"
+            else:
+                signature = f"{category}:{command[:80].lower()}"
+                decision_point = "generic_error_handling"
+            key = f"{signature}::{decision_point}"
+            entry = signatures.setdefault(
+                key,
+                {
+                    "signature": signature,
+                    "decision_point": decision_point,
+                    "count": 0,
+                    "sample_command": command,
+                    "category": category,
+                },
+            )
+            entry["count"] = int(entry.get("count", 0)) + 1
+        return sorted(signatures.values(), key=lambda x: int(x.get("count", 0)), reverse=True)
 
     @staticmethod
     def _terminal_failure_gate(state: DevGraphState) -> Dict[str, Any]:
@@ -710,14 +914,7 @@ class DevMasterGraph:
 
     @staticmethod
     def _default_validation_commands(stacks: List[str]) -> List[str]:
-        if "dotnet" in stacks:
-            return ["dotnet build", "dotnet test"]
-        if "python" in stacks:
-            return ["python -m pytest"]
-        if "ruby" in stacks:
-            return ["bundle exec rake test"]
-        if "node" in stacks:
-            return ["npm run build", "npm test -- --watch=false"]
+        _ = stacks
         return []
 
     @staticmethod
@@ -747,26 +944,49 @@ class DevMasterGraph:
         compile_candidates: List[str] = []
         for command in validation_commands:
             if not DevMasterGraph._is_long_running_validation_command(command):
-                compile_candidates.append(command)
+                executable, _reason = DevMasterGraph._is_validation_command_executable(
+                    command, project_dir=project_dir
+                )
+                if executable:
+                    compile_candidates.append(command)
         if compile_candidates:
             return compile_candidates
 
-        default_candidates = DevMasterGraph._default_validation_commands(stacks)
-        for command in default_candidates:
+        repository_candidates = DevMasterGraph._discover_repository_command_candidates(project_dir)
+        prioritized: List[str] = []
+        for key in ["build", "check", "test"]:
+            prioritized.extend(repository_candidates.get(key, []))
+        for command in prioritized:
             if not DevMasterGraph._is_long_running_validation_command(command):
-                compile_candidates.append(command)
+                executable, _reason = DevMasterGraph._is_validation_command_executable(
+                    command, project_dir=project_dir
+                )
+                if executable:
+                    compile_candidates.append(command)
 
-        package_json = os.path.join(project_dir, "package.json")
-        if not compile_candidates and os.path.exists(package_json):
-            compile_candidates.append("npm run build")
+        if not compile_candidates:
+            default_candidates = DevMasterGraph._default_validation_commands(stacks)
+            for command in default_candidates:
+                if not DevMasterGraph._is_long_running_validation_command(command):
+                    executable, _reason = DevMasterGraph._is_validation_command_executable(
+                        command, project_dir=project_dir
+                    )
+                    if executable:
+                        compile_candidates.append(command)
 
         return compile_candidates
 
     @staticmethod
-    def _extract_validation_command(raw: str, *, stacks: Optional[List[str]] = None) -> str:
+    def _extract_validation_command(
+        raw: str,
+        *,
+        stacks: Optional[List[str]] = None,
+        project_dir: str = "",
+    ) -> str:
         val = (raw or "").strip()
         if not val:
             return ""
+        _ = stacks
         if any(val.startswith(prefix) for prefix in DevMasterGraph.VALIDATION_COMMAND_PREFIXES):
             return val
         # Accept backticked shell snippets from PM text, e.g. "Run `npm run build`".
@@ -776,48 +996,25 @@ class DevMasterGraph:
             if any(normalized.startswith(prefix) for prefix in DevMasterGraph.VALIDATION_COMMAND_PREFIXES):
                 return normalized
         lowered = val.lower()
-        stack_hints = [str(x).lower() for x in (stacks or [])]
-        inferred_stack = "generic"
-        if any(s in stack_hints for s in ["node", "javascript", "typescript"]):
-            inferred_stack = "node"
-        elif "python" in stack_hints:
-            inferred_stack = "python"
-        elif "dotnet" in stack_hints:
-            inferred_stack = "dotnet"
-        elif "ruby" in stack_hints:
-            inferred_stack = "ruby"
-        if inferred_stack == "generic":
-            if any(tok in lowered for tok in ["npm", "pnpm", "yarn", "node", "typescript", "vite", "react", "angular"]):
-                inferred_stack = "node"
-            elif any(tok in lowered for tok in ["pytest", "python", "pip"]):
-                inferred_stack = "python"
-            elif any(tok in lowered for tok in ["dotnet", "c#"]):
-                inferred_stack = "dotnet"
-            elif any(tok in lowered for tok in ["rails", "ruby", "rake"]):
-                inferred_stack = "ruby"
-
-        wants_test = any(tok in lowered for tok in ["test", "spec", "assertion", "unit"])
-        wants_build = any(tok in lowered for tok in ["build", "compile", "compilation", "transpile", "bundle", "typecheck"])
-        wants_lint = "lint" in lowered
-
-        if inferred_stack == "node":
-            if wants_build:
-                return "npm run build"
-            if wants_test:
-                return "npm test -- --watch=false"
-            if wants_lint:
-                return "npm run lint"
-        if inferred_stack == "python":
-            if wants_test or wants_build:
-                return "python -m pytest"
-        if inferred_stack == "dotnet":
-            if wants_test:
-                return "dotnet test"
-            if wants_build:
-                return "dotnet build"
-        if inferred_stack == "ruby":
-            if wants_test or wants_build:
-                return "bundle exec rake test"
+        if project_dir:
+            repository_candidates = DevMasterGraph._discover_repository_command_candidates(project_dir)
+            if any(tok in lowered for tok in ["lint", "style", "format"]):
+                for command in repository_candidates.get("lint", []):
+                    executable, _ = DevMasterGraph._is_validation_command_executable(command, project_dir=project_dir)
+                    if executable:
+                        return command
+            if any(tok in lowered for tok in ["build", "compile", "compilation", "typecheck", "bundle"]):
+                for key in ["build", "check", "test"]:
+                    for command in repository_candidates.get(key, []):
+                        executable, _ = DevMasterGraph._is_validation_command_executable(command, project_dir=project_dir)
+                        if executable:
+                            return command
+            if any(tok in lowered for tok in ["test", "spec", "assertion", "verification"]):
+                for key in ["test", "check", "build"]:
+                    for command in repository_candidates.get(key, []):
+                        executable, _ = DevMasterGraph._is_validation_command_executable(command, project_dir=project_dir)
+                        if executable:
+                            return command
         return ""
 
     @staticmethod
@@ -1389,6 +1586,30 @@ class DevMasterGraph:
         pending_llm_task = None
         errors: List[str] = []
         for task in bootstrap_tasks:
+            violates_purity, purity_evidence = DevMasterGraph._violates_intent_purity(
+                state, str(task.command or "")
+            )
+            if violates_purity:
+                msg = (
+                    f"[INTENT_PURITY_BLOCK] bootstrap task={task.id} command='{task.command}' "
+                    f"introduces unrequested stack tokens."
+                )
+                errors.append(msg)
+                DevMasterGraph._emit_event(
+                    state,
+                    "intent_purity_blocked",
+                    phase="bootstrap",
+                    task_id=task.id,
+                    command=str(task.command or ""),
+                    evidence=purity_evidence,
+                )
+                DevMasterGraph._set_checklist_status(
+                    state,
+                    f"todo_{task.id}",
+                    "blocked",
+                    evidence={"phase": "bootstrap", "reason": "intent_purity_blocked", "details": purity_evidence},
+                )
+                break
             logs, touched_paths, task_errors, attempt_history, task_pending_llm, outcomes = execute_dev_tasks(
                 [task],
                 scope_root=state["scope_root"],
@@ -1440,6 +1661,16 @@ class DevMasterGraph:
                 pending_llm_task = task_pending_llm
                 break
         if errors:
+            signatures = DevMasterGraph._extract_deterministic_failure_signatures(
+                [x for x in state.get("attempt_history", []) if isinstance(x, dict)]
+            )
+            if signatures:
+                DevMasterGraph._emit_event(
+                    state,
+                    "deterministic_failure_signatures",
+                    phase="bootstrap",
+                    signatures=signatures[:12],
+                )
             timed_out_long_running = [
                 attempt
                 for attempt in state.get("attempt_history", [])
@@ -1891,6 +2122,8 @@ class DevMasterGraph:
             kind = "runtime"
             if any(tok in blob for tok in ["cannot find module", "module not found", "importerror", "no module named"]):
                 kind = "module"
+            elif any(tok in blob for tok in ["not found", "command not found", "is not recognized as an internal or external command"]):
+                kind = "capability"
             elif any(tok in blob for tok in ["syntaxerror", "unexpected token", "parse error", "ts1005"]):
                 kind = "syntax"
             elif any(tok in blob for tok in ["no such file", "cannot find the path", "enoent", "path"]):
@@ -1918,23 +2151,21 @@ class DevMasterGraph:
     ) -> List[str]:
         inferred: List[str] = []
         primary = taxonomy[0]["taxonomy"] if taxonomy else "runtime"
-        if "node" in stacks:
+        _ = stacks
+        if primary != "capability":
+            repository_candidates = DevMasterGraph._discover_repository_command_candidates(project_dir)
             if primary in {"module", "config", "path"}:
-                inferred.extend(["npm install", "npm run build"])
+                inferred.extend(repository_candidates.get("setup", []))
+                inferred.extend(repository_candidates.get("build", []))
+                inferred.extend(repository_candidates.get("check", []))
             elif primary == "test":
-                inferred.append("npm test -- --watch=false")
+                inferred.extend(repository_candidates.get("test", []))
+                inferred.extend(repository_candidates.get("check", []))
             else:
-                inferred.append("npm run build")
-        elif "python" in stacks:
-            if primary == "test":
-                inferred.append("python -m pytest")
-            else:
-                inferred.extend(["python -m pip install -r requirements.txt", "python -m pytest"])
-        elif "dotnet" in stacks:
-            inferred.extend(["dotnet restore", "dotnet build"])
-        elif "ruby" in stacks:
-            inferred.extend(["bundle install", "bundle exec rake test"])
-        if not inferred:
+                inferred.extend(repository_candidates.get("build", []))
+                inferred.extend(repository_candidates.get("check", []))
+                inferred.extend(repository_candidates.get("test", []))
+        if not inferred and primary != "capability":
             inferred = DevMasterGraph._infer_final_compile_commands(
                 project_dir=project_dir,
                 stacks=stacks,
@@ -2444,12 +2675,17 @@ class DevMasterGraph:
         preflight = state.get("dev_preflight_plan", {}) if isinstance(state.get("dev_preflight_plan"), dict) else {}
         raw_requirements = preflight.get("raw_validation_requirements", [])
         unresolved_requirements = preflight.get("unresolved_validation_requirements", [])
+        unresolved_text = (
+            [str(item.get("requirement", "")) for item in unresolved_requirements if isinstance(item, dict)]
+            if isinstance(unresolved_requirements, list)
+            else []
+        )
         validation_tasks = state.get("validation_tasks", [])
 
         if raw_requirements and unresolved_requirements and not validation_tasks:
             msg = (
                 "[VALIDATION] required validations were provided by PM but none were executable: "
-                f"{unresolved_requirements}"
+                f"{unresolved_text or unresolved_requirements}"
             )
             for item in state.get("internal_checklist", []):
                 if isinstance(item, dict) and str(item.get("kind")) == "validation":
@@ -2727,6 +2963,14 @@ class DevMasterGraph:
         if pending:
             errors.append(f"[FINAL_COMPILE] pending llm recovery unsupported for final compile: {pending.get('task_id')}")
         if errors:
+            signatures = DevMasterGraph._extract_deterministic_failure_signatures(attempt_history)
+            if signatures:
+                DevMasterGraph._emit_event(
+                    state,
+                    "deterministic_failure_signatures",
+                    phase="final_compile",
+                    signatures=signatures[:12],
+                )
             stacks = [str(x) for x in state.get("detected_stacks", []) if isinstance(x, str)]
             active_project_root = str(state.get("active_project_root", "")).strip()
             recovery_commands = DevMasterGraph._infer_compile_recovery_commands(
@@ -2734,6 +2978,33 @@ class DevMasterGraph:
                 taxonomy=taxonomy,
                 project_dir=active_project_root,
             )
+            attempted_commands_lower = {
+                str(item.get("command", "")).strip().lower()
+                for item in attempt_history
+                if isinstance(item, dict) and str(item.get("command", "")).strip()
+            }
+            filtered_recovery_commands: List[str] = []
+            rejected_recovery: List[Dict[str, Any]] = []
+            for cmd in recovery_commands:
+                cmd_low = str(cmd).strip().lower()
+                if cmd_low in attempted_commands_lower:
+                    rejected_recovery.append({"command": cmd, "reason": "identical_command_without_new_evidence"})
+                    continue
+                violates_purity, purity_evidence = DevMasterGraph._violates_intent_purity(state, cmd)
+                if violates_purity:
+                    rejected_recovery.append(
+                        {"command": cmd, "reason": "intent_purity_blocked", "evidence": purity_evidence}
+                    )
+                    continue
+                filtered_recovery_commands.append(cmd)
+            if rejected_recovery:
+                DevMasterGraph._emit_event(
+                    state,
+                    "recovery_command_rejected",
+                    phase="final_compile",
+                    rejections=rejected_recovery,
+                )
+            recovery_commands = filtered_recovery_commands
             if recovery_commands:
                 recovery_tasks = [
                     DevTask(
@@ -2777,6 +3048,15 @@ class DevMasterGraph:
                     state["phase_status"]["execute_final_compile_gate"] = "completed"
                     DevMasterGraph._emit(state, "[FINAL_COMPILE] recovered")
                     return state
+            else:
+                state["capability_gaps"] = list(state.get("capability_gaps", [])) + [
+                    {
+                        "phase": "final_compile",
+                        "reason": "no_safe_recovery_command",
+                        "taxonomy": taxonomy,
+                        "errors": errors[-2:],
+                    }
+                ]
             if compile_error_file_refs:
                 state["errors"].append(
                     "[RECOVERABLE_CONTEXT_GAP] final compile failed with file-level diagnostics; "

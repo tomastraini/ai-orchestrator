@@ -93,13 +93,6 @@ class DevMasterGraphTests(unittest.TestCase):
 
     def test_llm_fallback_recovers_after_deterministic_exhaustion(self) -> None:
         plan = self._sample_plan()
-        plan["bootstrap_commands"] = [
-            {
-                "cwd": ".",
-                "command": "python -c \"import sys; sys.stderr.write('npm error canceled\\n'); sys.exit(1)\"",
-                "purpose": "simulate interactive failure",
-            }
-        ]
 
         def llm_corrector(_: dict) -> str:
             return "python -c \"print('recovered')\""
@@ -111,7 +104,16 @@ class DevMasterGraphTests(unittest.TestCase):
                 plan=plan,
                 scope_root=tmp,
                 ask_user=lambda _: "n/a",
-                handoff=None,
+                handoff={
+                    "execution_origin": "dev",
+                    "execution_steps": [
+                        {
+                            "cwd": ".",
+                            "command": "python -c \"import sys; sys.stderr.write('npm error canceled\\n'); sys.exit(1)\"",
+                            "purpose": "simulate interactive failure",
+                        }
+                    ],
+                },
                 llm_corrector=llm_corrector,
             )
         self.assertEqual(state["status"], "completed", msg=str(state.get("errors", [])))
@@ -121,13 +123,6 @@ class DevMasterGraphTests(unittest.TestCase):
 
     def test_bootstrap_failed_marks_impl_skipped(self) -> None:
         plan = self._sample_plan()
-        plan["bootstrap_commands"] = [
-            {
-                "cwd": ".",
-                "command": "python -c \"import sys; sys.exit(1)\"",
-                "purpose": "irrecoverable failure",
-            }
-        ]
 
         graph = DevMasterGraph()
         with tempfile.TemporaryDirectory() as tmp:
@@ -136,7 +131,16 @@ class DevMasterGraphTests(unittest.TestCase):
                 plan=plan,
                 scope_root=tmp,
                 ask_user=lambda _: "n/a",
-                handoff=None,
+                handoff={
+                    "execution_origin": "dev",
+                    "execution_steps": [
+                        {
+                            "cwd": ".",
+                            "command": "python -c \"import sys; sys.exit(1)\"",
+                            "purpose": "irrecoverable failure",
+                        }
+                    ],
+                },
                 llm_corrector=lambda _: "",
                 max_model_calls_per_run=0,
             )
@@ -161,13 +165,6 @@ class DevMasterGraphTests(unittest.TestCase):
 
     def test_runtime_prompt_wiring_visible_in_logs(self) -> None:
         plan = self._sample_plan()
-        plan["bootstrap_commands"] = [
-            {
-                "cwd": ".",
-                "command": "python -c \"print('Proceed? (y/N)'); x=input(); print(x)\"",
-                "purpose": "runtime prompt flow",
-            }
-        ]
         graph = DevMasterGraph()
         captured: list[str] = []
         with tempfile.TemporaryDirectory() as tmp:
@@ -176,6 +173,16 @@ class DevMasterGraphTests(unittest.TestCase):
                 plan=plan,
                 scope_root=tmp,
                 ask_user=lambda q: "y" if "[DEV RUNTIME PROMPT]" in q else "n/a",
+                handoff={
+                    "execution_origin": "dev",
+                    "execution_steps": [
+                        {
+                            "cwd": ".",
+                            "command": "python -c \"print('Proceed? (y/N)'); x=input(); print(x)\"",
+                            "purpose": "runtime prompt flow",
+                        }
+                    ],
+                },
                 log_sink=captured.append,
             )
         self.assertEqual(state["status"], "completed", msg=str(state.get("errors", [])))
@@ -183,13 +190,6 @@ class DevMasterGraphTests(unittest.TestCase):
 
     def test_bootstrap_dev_server_in_auto_mode_does_not_block_execution(self) -> None:
         plan = self._sample_plan()
-        plan["bootstrap_commands"] = [
-            {
-                "cwd": ".",
-                "command": "python -c \"import time; print(' npm run dev '); print('VITE v7.3.1 ready in 20 ms'); print('Local: http://localhost:5173/'); time.sleep(2)\"",
-                "purpose": "start dev server",
-            }
-        ]
         graph = DevMasterGraph()
         with tempfile.TemporaryDirectory() as tmp:
             state = graph.run(
@@ -197,12 +197,23 @@ class DevMasterGraphTests(unittest.TestCase):
                 plan=plan,
                 scope_root=tmp,
                 ask_user=lambda _: "n/a",
+                handoff={
+                    "execution_origin": "dev",
+                    "execution_steps": [
+                        {
+                            "cwd": ".",
+                            "command": "python -c \"import time; print(' npm run dev '); print('VITE v7.3.1 ready in 20 ms'); print('Local: http://localhost:5173/'); time.sleep(2)\"",
+                            "purpose": "start dev server",
+                        }
+                    ],
+                },
             )
         self.assertEqual(state["status"], "completed", msg=str(state.get("errors", [])))
         bootstrap_outcomes = [
             outcome
             for outcome in state.get("task_outcomes", [])
             if str(outcome.get("task_id", "")).startswith("bootstrap_")
+            or str(outcome.get("task_id", "")).startswith("handoff_")
         ]
         self.assertTrue(bootstrap_outcomes, msg=str(state.get("task_outcomes", [])))
         self.assertTrue(
@@ -301,7 +312,7 @@ class DevMasterGraphTests(unittest.TestCase):
                 ask_user=lambda _: "n/a",
             )
         self.assertEqual(state.get("final_compile_status"), "failed")
-        self.assertEqual(state.get("status"), "implementation_failed")
+        self.assertEqual(state.get("status"), "partial_progress")
         self.assertTrue(
             any("no terminating compile/build command inferred" in err.lower() for err in state.get("errors", [])),
             msg=str(state.get("errors", [])),
@@ -467,6 +478,16 @@ class DevMasterGraphTests(unittest.TestCase):
                 plan=plan,
                 scope_root=tmp,
                 ask_user=lambda _: "n/a",
+                handoff={
+                    "execution_origin": "dev",
+                    "execution_steps": [
+                        {
+                            "cwd": ".",
+                            "command": "python -c \"print('bootstrap')\"",
+                            "purpose": "bootstrap",
+                        }
+                    ],
+                },
             )
         categories = [str(event.get("category", "")) for event in state.get("telemetry_events", []) if isinstance(event, dict)]
         self.assertIn("post_handoff_index_refresh", categories, msg=str(categories))
@@ -493,7 +514,7 @@ class DevMasterGraphTests(unittest.TestCase):
                 scope_root=tmp,
                 ask_user=lambda _: "n/a",
             )
-        self.assertEqual(state.get("status"), "implementation_failed")
+        self.assertEqual(state.get("status"), "partial_progress")
         self.assertTrue(
             any("Intent-to-target alignment failed" in err for err in state.get("errors", [])),
             msg=str(state.get("errors", [])),
@@ -513,12 +534,39 @@ class DevMasterGraphTests(unittest.TestCase):
             self.assertIn("/projects/calc/src/App.tsx", resolved.replace("\\", "/"))
             self.assertNotIn("/projects/calc/projects/calc/", resolved.replace("\\", "/"))
 
-    def test_validation_nl_requirement_maps_to_executable_for_known_stack(self) -> None:
-        command = DevMasterGraph._extract_validation_command(
-            "TypeScript compilation yields no type errors",
-            stacks=["node"],
-        )
+    def test_validation_nl_requirement_maps_to_executable_from_repo_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "package.json"), "w", encoding="utf-8") as fh:
+                fh.write('{"scripts":{"build":"tsc -p tsconfig.json"}}')
+            command = DevMasterGraph._extract_validation_command(
+                "TypeScript compilation yields no type errors",
+                stacks=["generic"],
+                project_dir=tmp,
+            )
         self.assertEqual(command, "npm run build")
+
+    def test_runtime_ignores_pm_bootstrap_commands(self) -> None:
+        graph = DevMasterGraph()
+        plan = self._sample_plan()
+        plan["bootstrap_commands"] = [
+            {
+                "cwd": ".",
+                "command": "python -c \"raise RuntimeError('should not execute')\"",
+                "purpose": "pm authored command should be ignored",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            state = graph.run(
+                request_id="ignore-pm-bootstrap-1",
+                plan=plan,
+                scope_root=tmp,
+                ask_user=lambda _: "n/a",
+            )
+        self.assertEqual(state.get("bootstrap_status"), "completed")
+        self.assertFalse(
+            any("should not execute" in str(outcome.get("stderr_excerpt", "")) for outcome in state.get("task_outcomes", [])),
+            msg=str(state.get("task_outcomes", [])),
+        )
 
     def test_discovery_penalizes_previously_rejected_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

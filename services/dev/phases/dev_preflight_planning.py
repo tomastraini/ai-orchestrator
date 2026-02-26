@@ -16,24 +16,6 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
     project_dir = os.path.join(state["scope_root"], rel)
     os.makedirs(project_dir, exist_ok=True)
     detected = graph_cls._detect_stacks_for_root(project_dir)
-    if detected == ["generic"]:
-        stack_text_tokens: List[str] = []
-        for task in state.get("bootstrap_tasks", []):
-            if isinstance(task, DevTask):
-                stack_text_tokens.append(str(task.command or ""))
-        plan_stack = state.get("plan", {}).get("stack", {})
-        if isinstance(plan_stack, dict):
-            stack_text_tokens.append(str(plan_stack.get("frontend", "")))
-            stack_text_tokens.append(str(plan_stack.get("backend", "")))
-        stack_text = " ".join(stack_text_tokens).lower()
-        if any(tok in stack_text for tok in ["npm", "pnpm", "yarn", "vite", "react", "next"]):
-            detected = ["node"]
-        elif any(tok in stack_text for tok in ["dotnet", "c#", "asp.net"]):
-            detected = ["dotnet"]
-        elif any(tok in stack_text for tok in ["python", "pip", "pytest", "django", "flask", "fastapi"]):
-            detected = ["python"]
-        elif any(tok in stack_text for tok in ["ruby", "rails", "bundler", "rake"]):
-            detected = ["ruby"]
     state["detected_stacks"] = detected
     state["active_project_root"] = project_dir
 
@@ -43,19 +25,47 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
         if isinstance(x, str) and str(x).strip()
     ]
     validation_commands: List[str] = []
-    unresolved_validation_requirements: List[str] = []
+    unresolved_validation_requirements: List[dict] = []
     for requirement in raw_validation_requirements:
-        cmd = graph_cls._extract_validation_command(requirement, stacks=detected)
+        cmd = graph_cls._extract_validation_command(
+            requirement,
+            stacks=detected,
+            project_dir=project_dir,
+        )
         if cmd:
             lower_cmd = cmd.lower().strip()
             if any(lower_cmd.startswith(prefix) for prefix in ["npm ", "pnpm ", "yarn "]):
                 package_json = os.path.join(project_dir, "package.json")
                 if not os.path.exists(package_json):
-                    unresolved_validation_requirements.append(requirement)
+                    unresolved_validation_requirements.append(
+                        {
+                            "requirement": requirement,
+                            "classification": "manual_followup_required",
+                            "reason": "missing_package_json",
+                        }
+                    )
+                    continue
+            if hasattr(graph_cls, "_is_validation_command_executable"):
+                executable, reason = graph_cls._is_validation_command_executable(cmd, project_dir=project_dir)
+                if not executable:
+                    unresolved_validation_requirements.append(
+                        {
+                            "requirement": requirement,
+                            "command": cmd,
+                            "classification": "manual_followup_required",
+                            "reason": reason,
+                        }
+                    )
                     continue
             validation_commands.append(cmd)
         else:
-            unresolved_validation_requirements.append(requirement)
+            unresolved_validation_requirements.append(
+                {
+                    "requirement": requirement,
+                    "classification": "manual_followup_required",
+                    "reason": "non_executable_requirement",
+                }
+            )
 
     if not validation_commands and not raw_validation_requirements:
         validation_commands = graph_cls._default_validation_commands(detected)

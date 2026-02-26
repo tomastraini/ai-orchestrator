@@ -40,32 +40,13 @@ def detect_stacks_for_root(project_dir: str) -> List[str]:
 
 
 def default_validation_commands(stacks: List[str]) -> List[str]:
-    if "dotnet" in stacks:
-        return ["dotnet build", "dotnet test"]
-    if "python" in stacks:
-        return ["python -m pytest"]
-    if "ruby" in stacks:
-        return ["bundle exec rake test"]
-    if "node" in stacks:
-        return ["npm run build"]
+    _ = stacks
     return []
 
 
 def is_long_running_validation_command(command: str) -> bool:
-    low = f" {str(command or '').lower()} "
-    hints = [
-        " npm run dev ",
-        " npm start ",
-        " pnpm dev ",
-        " yarn dev ",
-        " vite ",
-        " next dev ",
-        " flask run ",
-        " uvicorn ",
-        " rails server ",
-        " dotnet watch ",
-    ]
-    return any(token in low for token in hints)
+    low = str(command or "").lower()
+    return any(hint in low for hint in [" run dev", " start", " serve", " watch", " --watch", " server"])
 
 
 def infer_final_compile_commands(
@@ -81,14 +62,9 @@ def infer_final_compile_commands(
     if compile_candidates:
         return compile_candidates
 
-    default_candidates = default_validation_commands(stacks)
-    for command in default_candidates:
-        if not is_long_running_validation_command(command):
-            compile_candidates.append(command)
-
-    package_json = os.path.join(project_dir, "package.json")
-    if not compile_candidates and os.path.exists(package_json):
-        compile_candidates.append("npm run build")
+    _ = stacks
+    if not compile_candidates and os.path.exists(os.path.join(project_dir, "Makefile")):
+        compile_candidates.append("make build")
 
     return compile_candidates
 

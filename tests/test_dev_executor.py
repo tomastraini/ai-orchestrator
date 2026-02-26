@@ -40,15 +40,12 @@ class DevExecutorTests(unittest.TestCase):
             _, _, errors, _, _, _ = execute_dev_tasks(tasks, scope_root=tmp)
             self.assertTrue(any("[BLOCKED]" in e for e in errors), msg=str(errors))
 
-    def test_deterministic_rewrite_for_nest_and_cra(self) -> None:
-        cra = rewrite_command_deterministic(
-            "npx create-react-app front-end --template typescript",
+    def test_deterministic_rewrite_for_interactive_prompt_adds_yes_flag(self) -> None:
+        rewritten = rewrite_command_deterministic(
+            "tool create sample-app",
             "interactive_prompt",
         )
-        self.assertIn("npx --yes", cra)
-
-        nest = rewrite_command_deterministic("nest new back-end", "interactive_prompt")
-        self.assertEqual(nest, "nest new back-end")
+        self.assertEqual(rewritten, "tool create sample-app --yes")
 
     def test_deterministic_rewrite_normalizes_vite_target(self) -> None:
         vite = rewrite_command_deterministic(

@@ -29,7 +29,7 @@ PROMPT_REGEX = re.compile(
     re.IGNORECASE,
 )
 SERVICE_READY_REGEX = re.compile(
-    r"(ready in|localhost:|listening on|started|running at|vite v\d)",
+    r"(ready|localhost:|listening on|started|running at|server)",
     re.IGNORECASE,
 )
 SECRET_PATTERNS = [
@@ -89,11 +89,11 @@ def _violates_constraints(command: str, constraints: List[str]) -> Optional[str]
             "no dev server" in constraint
             or "do not run dev server" in constraint
             or "do not start server" in constraint
-            or "no npm start" in constraint
-        ) and any(token in low_cmd for token in [" npm start ", " npm run dev ", " pnpm dev ", " yarn dev ", " vite "]):
+            or "no start command" in constraint
+        ) and any(token in low_cmd for token in [" run dev ", " start ", " serve ", " watch ", " --watch ", " server "]):
             return f"violates constraint '{raw_constraint}'"
         if ("no install" in constraint or "do not install" in constraint) and any(
-            token in low_cmd for token in [" npm install ", " pnpm install ", " yarn install ", " pip install "]
+            token in low_cmd for token in [" install ", " add ", " restore "]
         ):
             return f"violates constraint '{raw_constraint}'"
     return None
@@ -134,20 +134,11 @@ def _emit_event(
 
 
 def _is_likely_long_running_command(command: str) -> bool:
-    low = f" {str(command or '').lower()} "
-    tokens = [
-        " npm run dev ",
-        " npm start ",
-        " pnpm dev ",
-        " yarn dev ",
-        " vite ",
-        " next dev ",
-        " flask run ",
-        " uvicorn ",
-        " rails server ",
-        " dotnet watch ",
-    ]
-    return any(token in low for token in tokens)
+    low = str(command or "").lower()
+    return any(
+        hint in low
+        for hint in [" run dev", " start", " serve", " watch", " --watch", " --live-reload", " server"]
+    )
 
 
 def classify_failure(stdout: str, stderr: str, exit_code: int) -> str:
@@ -156,7 +147,11 @@ def classify_failure(stdout: str, stderr: str, exit_code: int) -> str:
         return "operation_cancelled"
     if "ok to proceed?" in text or "npm error canceled" in text or "prompt" in text:
         return "interactive_prompt"
-    if "not recognized as an internal or external command" in text or "command not found" in text:
+    if (
+        "not recognized as an internal or external command" in text
+        or "command not found" in text
+        or re.search(r"\bnot found\b", text) is not None
+    ):
         return "command_not_found"
     if "no such file or directory" in text or "cannot find the path specified" in text or "enoent" in text:
         return "path_issue"
@@ -167,7 +162,6 @@ def classify_failure(stdout: str, stderr: str, exit_code: int) -> str:
         or "error ts" in text
         or "typescript" in text
         or "esbuild" in text
-        or "vite build" in text
     ):
         return "syntax_or_compile_error"
     if "cannot find module" in text:
@@ -242,9 +236,7 @@ def rewrite_command_deterministic(
     low = cmd.lower()
 
     if category == "interactive_prompt":
-        if low.startswith("npx ") and "--yes" not in low:
-            return f"npx --yes {cmd[4:].strip()}"
-        if " npm " in f" {low} " and "--yes" not in low:
+        if "--yes" not in low and "--force" not in low:
             return f"{cmd} --yes"
 
     return normalize_command_for_stack(normalize_non_interactive(cmd), stack_hint)
