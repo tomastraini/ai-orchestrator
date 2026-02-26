@@ -72,6 +72,10 @@ Implemented as a production baseline. The orchestrator now builds a richer cogni
 
 ## Milestone B: Structured Editing Engine
 
+Detailed remediation execution plan:
+
+- `documentation/milestones/milestone-b-plus-remediation.md`
+
 ### Deliverables
 
 - Introduce edit primitives:

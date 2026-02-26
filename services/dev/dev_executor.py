@@ -158,6 +158,10 @@ def classify_failure(stdout: str, stderr: str, exit_code: int) -> str:
         return "command_not_found"
     if "no such file or directory" in text or "cannot find the path specified" in text:
         return "path_issue"
+    if "error ts" in text or "typescript" in text or "esbuild" in text or "vite build" in text:
+        return "compile_error"
+    if "cannot find module" in text:
+        return "dependency_or_module_error"
     if "package manager" in text or "npm" in text or "yarn" in text or "pnpm" in text:
         return "package_manager_mismatch"
     if exit_code != 0:
@@ -661,6 +665,8 @@ def execute_dev_tasks(
                         "elapsed_ms": last_attempt.get("elapsed_ms", 0),
                         "run_mode": last_attempt.get("run_mode", "terminating"),
                         "evidence": {"attempted_commands": attempted_commands},
+                        "stdout_excerpt": _sanitize_log_value((last_attempt or {}).get("stdout", ""), 800),
+                        "stderr_excerpt": _sanitize_log_value((last_attempt or {}).get("stderr", ""), 800),
                     }
                 )
                 _emit_event(
@@ -687,6 +693,8 @@ def execute_dev_tasks(
                         "elapsed_ms": (last_attempt or {}).get("elapsed_ms", 0),
                         "run_mode": (last_attempt or {}).get("run_mode", "terminating"),
                         "evidence": {"attempted_commands": attempted_commands},
+                        "stdout_excerpt": _sanitize_log_value((last_attempt or {}).get("stdout", ""), 800),
+                        "stderr_excerpt": _sanitize_log_value((last_attempt or {}).get("stderr", ""), 800),
                     }
                 )
                 _emit_event(
@@ -716,6 +724,8 @@ def execute_dev_tasks(
                     "attempts": len(attempted_commands),
                     "smoke_ready": bool((last_attempt or {}).get("smoke_ready", False)),
                 },
+                "stdout_excerpt": _sanitize_log_value((last_attempt or {}).get("stdout", ""), 800),
+                "stderr_excerpt": _sanitize_log_value((last_attempt or {}).get("stderr", ""), 800),
             }
         )
         _emit_event(

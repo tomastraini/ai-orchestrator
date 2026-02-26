@@ -24,7 +24,7 @@ from services.dev.phases.finalize_result import run as finalize_result_phase
 from services.dev.phases.ingest_pm_plan import run as ingest_pm_plan_phase
 from services.dev.phases.prepare_execution_steps import run as prepare_execution_steps_phase
 from services.dev.types.dev_graph_state import DevGraphState
-from services.dev.edit_primitives import patch_region
+from services.dev.edit_primitives import patch_region, rename_path
 from services.workspace.cognition.scaffold_probe import probe_scaffold_layout
 from services.workspace.cognition.snapshot_store import persist_cognition_snapshot
 from services.workspace.project_index import build_cognition_index, detect_stack_from_markers, rank_candidate_files, scan_workspace_context
@@ -1511,6 +1511,29 @@ class DevMasterGraph:
         return (details or "Generated content") + "\n"
 
     @staticmethod
+    def _infer_rename_destination(*, safe_target: str, file_name: str, expected_path_hint: str, details: str) -> str:
+        # Prefer explicit extension/path mention in details when available.
+        detail_text = str(details or "").strip()
+        match = re.search(r"\bto\s+([A-Za-z0-9_./\\-]+\.[A-Za-z0-9_]+)\b", detail_text, flags=re.IGNORECASE)
+        if match:
+            candidate = match.group(1).replace("\\", "/").strip()
+            leaf = os.path.basename(candidate)
+            if leaf:
+                return os.path.join(os.path.dirname(safe_target), leaf)
+
+        # If expected path hint points to a file leaf, use it.
+        expected = str(expected_path_hint or "").replace("\\", "/").strip().lstrip("./")
+        expected_leaf = os.path.basename(expected)
+        if expected_leaf and "." in expected_leaf and expected_leaf != os.path.basename(file_name):
+            return os.path.join(os.path.dirname(safe_target), expected_leaf)
+
+        # Fallback: if source is .ts and detail suggests tsx/jsx, map extension.
+        src_leaf = os.path.basename(safe_target)
+        if src_leaf.endswith(".ts") and ("tsx" in detail_text.lower() or "jsx" in detail_text.lower()):
+            return os.path.join(os.path.dirname(safe_target), src_leaf[:-3] + ".tsx")
+        return ""
+
+    @staticmethod
     def _llm_generate_file_content(
         *,
         state: DevGraphState,
@@ -1573,6 +1596,42 @@ class DevMasterGraph:
         if modification_type in {"create_directory", "mkdir", "create_dir"}:
             os.makedirs(safe_target, exist_ok=True)
             return "ensured_directory", f"pass={pass_index}", safe_target
+
+        rename_like = modification_type in {"rename", "move", "rename_file", "mv"}
+        if rename_like:
+            if not os.path.exists(safe_target):
+                discovered = DevMasterGraph._discover_existing_path(
+                    active_root,
+                    expected_path_hint,
+                    file_name,
+                    project_root=str(state.get("project_root", "")),
+                    file_index=file_index,
+                    state=state,
+                )
+                if discovered:
+                    safe_target = discovered
+            if not os.path.exists(safe_target):
+                return "missing_expected_file", "rename_source_missing", safe_target
+            destination = DevMasterGraph._infer_rename_destination(
+                safe_target=safe_target,
+                file_name=file_name,
+                expected_path_hint=expected_path_hint,
+                details=details,
+            )
+            if not destination:
+                return "invalid_operation", "rename_destination_unresolved", safe_target
+            changed, note = rename_path(src_path=safe_target, dest_path=destination)
+            if not changed and note == "noop_same_path":
+                return "observed_file", "rename_noop_same_path", safe_target
+            if not changed:
+                return "invalid_operation", f"rename_failed:{note}", safe_target
+            state.setdefault("target_resolution_evidence", {})[expected_path_hint or file_name] = {
+                "resolved_path": DevMasterGraph._relpath_safe(state, destination),
+                "resolution_method": "rename_operation",
+                "confidence": 0.95,
+                "candidates_considered": [DevMasterGraph._relpath_safe(state, safe_target), DevMasterGraph._relpath_safe(state, destination)],
+            }
+            return "renamed_file", note, destination
 
         def _looks_like_file_target(path: str, file_hint: str) -> bool:
             hint_leaf = os.path.basename(str(file_hint or "").replace("\\", "/")).strip()
@@ -1782,6 +1841,9 @@ class DevMasterGraph:
                 proof = target_proofs.get(key, {})
                 before_hash = str(proof.get("before_hash", ""))
                 after_hash = str(proof.get("after_hash", ""))
+                before_path = str(proof.get("before_path", ""))
+                after_path = str(proof.get("after_path", ""))
+                action = str(proof.get("action", ""))
                 mod_type = str(target.get("modification_type", "")).strip().lower()
                 if mod_type in {"verify", "inspect", "check"}:
                     DevMasterGraph._set_checklist_status(
@@ -1792,6 +1854,22 @@ class DevMasterGraph:
                     )
                     continue
                 if before_hash == after_hash:
+                    rename_like_proof = action == "renamed_file" and before_path and after_path and before_path != after_path
+                    if rename_like_proof:
+                        DevMasterGraph._set_checklist_status(
+                            state,
+                            f"todo_impl_{idx}",
+                            "completed",
+                            evidence={
+                                "phase": "implementation",
+                                "before_hash": before_hash,
+                                "after_hash": after_hash,
+                                "before_path": DevMasterGraph._relpath_safe(state, before_path),
+                                "after_path": DevMasterGraph._relpath_safe(state, after_path),
+                                "action": action,
+                            },
+                        )
+                        continue
                     raise RuntimeError(
                         f"Target mutation proof missing for {key or f'implementation_target_{idx}'}: no content delta detected."
                     )
@@ -2040,6 +2118,13 @@ class DevMasterGraph:
         state["touched_paths"].extend(touched_paths)
         state["attempt_history"].extend(attempt_history)
         state["task_outcomes"].extend(outcomes)
+        compile_error_file_refs = DevMasterGraph._extract_error_file_refs(attempt_history)
+        if compile_error_file_refs:
+            DevMasterGraph._emit_event(
+                state,
+                "final_compile_error_file_refs",
+                refs=compile_error_file_refs,
+            )
         for outcome in outcomes:
             checklist_id = f"todo_{outcome.get('task_id', '')}"
             status = "completed" if outcome.get("status") == "completed" else "failed"
@@ -2047,6 +2132,11 @@ class DevMasterGraph:
         if pending:
             errors.append(f"[FINAL_COMPILE] pending llm recovery unsupported for final compile: {pending.get('task_id')}")
         if errors:
+            if compile_error_file_refs:
+                state["errors"].append(
+                    "[RECOVERABLE_CONTEXT_GAP] final compile failed with file-level diagnostics; "
+                    f"targeted fix candidates={compile_error_file_refs[:8]}"
+                )
             state["errors"].extend(errors)
             state["final_compile_status"] = "failed"
             state["status"] = "implementation_failed"

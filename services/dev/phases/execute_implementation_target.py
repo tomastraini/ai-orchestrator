@@ -4,6 +4,7 @@ import difflib
 import os
 from typing import Any, Dict, Optional, Tuple
 
+from services.dev.edit_validator import validate_post_apply, validate_pre_apply
 from services.dev.types.dev_graph_state import DevGraphState
 
 
@@ -38,7 +39,13 @@ def run(
     )
     key = f"todo_impl_{idx}"
     if key not in target_proofs:
-        target_proofs[key] = {"before_hash": graph_cls._file_sha1(safe_target), "after_hash": ""}
+        target_proofs[key] = {
+            "before_hash": graph_cls._file_sha1(safe_target),
+            "after_hash": "",
+            "before_path": safe_target,
+            "after_path": "",
+            "action": "",
+        }
     before_text = ""
     if os.path.exists(safe_target) and os.path.isfile(safe_target):
         try:
@@ -46,6 +53,23 @@ def run(
                 before_text = fh.read()
         except Exception:
             before_text = ""
+    pre_check = validate_pre_apply(
+        path=safe_target,
+        modification_type=modification_type,
+        creation_policy=creation_policy,
+        exists_before=os.path.exists(safe_target),
+    )
+    graph_cls._emit_event(
+        state,
+        "edit_precheck",
+        pass_index=pass_index,
+        path=graph_cls._relpath_safe(state, safe_target),
+        passed=bool(pre_check.get("passed", False)),
+        errors=pre_check.get("errors", []),
+        checks=pre_check.get("checks", []),
+    )
+    if not bool(pre_check.get("passed", False)):
+        raise RuntimeError(f"Edit pre-check failed for {expected}: {pre_check.get('errors', [])}")
 
     action, action_note, resolved_target = graph_cls._apply_target_in_pass(
         state=state,
@@ -117,8 +141,14 @@ def run(
             raise RuntimeError(f"Expected target missing and discovery failed: {expected}")
     if action == "low_signal_update_rejected":
         raise RuntimeError(f"Low-signal update rejected for {resolved_target}")
+    if action == "invalid_operation":
+        raise RuntimeError(f"Invalid operation for target {expected}: {action_note}")
 
     target_proofs[key]["after_hash"] = graph_cls._file_sha1(resolved_target)
+    target_proofs[key]["after_path"] = resolved_target
+    prev_action = str(target_proofs[key].get("action", ""))
+    if not (prev_action == "renamed_file" and action == "observed_file"):
+        target_proofs[key]["action"] = action
     state["touched_paths"].append(resolved_target)
     after_text = ""
     if os.path.exists(resolved_target) and os.path.isfile(resolved_target):
@@ -127,6 +157,24 @@ def run(
                 after_text = fh.read()
         except Exception:
             after_text = ""
+    post_check = validate_post_apply(
+        path=resolved_target,
+        before_content=before_text,
+        after_content=after_text,
+        action=action,
+    )
+    graph_cls._emit_event(
+        state,
+        "edit_postcheck",
+        pass_index=pass_index,
+        path=graph_cls._relpath_safe(state, resolved_target),
+        action=action,
+        passed=bool(post_check.get("passed", False)),
+        errors=post_check.get("errors", []),
+        checks=post_check.get("checks", []),
+    )
+    if not bool(post_check.get("passed", False)):
+        raise RuntimeError(f"Edit post-check failed for {expected}: {post_check.get('errors', [])}")
     diff_preview = "".join(
         difflib.unified_diff(
             before_text.splitlines(keepends=True)[:80],
