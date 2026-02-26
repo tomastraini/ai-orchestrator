@@ -15,6 +15,7 @@ from services.dev.command_policy import (
     normalize_command_for_stack,
     normalize_non_interactive,
 )
+from services.dev.types.executor_types import ExecuteDevTasksResult, RecoveryRunResult, RunOnceResult
 from shared.pathing import _collapse_nested_projects_segments
 from shared.dev_schemas import DevTask
 
@@ -269,7 +270,7 @@ def _run_once(
     ask_runtime_prompt: Optional[Callable[[str], str]] = None,
     interactive_prompt_timeout_seconds: float = 60.0,
     run_mode: Literal["terminating", "service_smoke"] = "terminating",
-) -> Tuple[List[str], Optional[str], Dict[str, Any]]:
+) -> RunOnceResult:
     logs: List[str] = []
     started = time.time()
     _emit(logs, f"[RUN] {task_id} ({task_kind}) @ {cwd}: {command}", log_sink)
@@ -469,7 +470,7 @@ def execute_dev_tasks(
     interactive_prompt_timeout_seconds: float = 60.0,
     constraints: Optional[List[str]] = None,
     command_run_mode: Literal["terminating", "service_smoke", "auto"] = "terminating",
-) -> Tuple[List[str], List[str], List[str], List[Dict[str, Any]], Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> ExecuteDevTasksResult:
     logs: List[str] = []
     touched_paths: List[str] = []
     errors: List[str] = []
@@ -791,7 +792,7 @@ def execute_single_recovery_command(
     ask_runtime_prompt: Optional[Callable[[str], str]] = None,
     interactive_prompt_timeout_seconds: float = 60.0,
     command_run_mode: Literal["terminating", "service_smoke"] = "terminating",
-) -> Tuple[List[str], Optional[str], Dict[str, Any]]:
+) -> RecoveryRunResult:
     scope_abs = _normalize_scope_path(scope_root)
     if _is_blocked_command(command):
         attempt = {

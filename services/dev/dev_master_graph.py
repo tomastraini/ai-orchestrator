@@ -8,62 +8,28 @@ import re
 import time
 import difflib
 from dataclasses import asdict
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypedDict
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from langgraph.graph import END, START, StateGraph
 
 from services.dev.dev_executor import execute_dev_tasks, execute_single_recovery_command
+from services.dev.phases.ask_cli_clarifications import run as ask_cli_clarifications_phase
+from services.dev.phases.derive_dev_todos import run as derive_dev_todos_phase
+from services.dev.phases.dev_preflight_planning import run as dev_preflight_planning_phase
+from services.dev.phases.execute_bootstrap_phase import run as execute_bootstrap_phase
+from services.dev.phases.execute_final_compile_gate import run as execute_final_compile_gate
+from services.dev.phases.execute_implementation_phase import run as execute_implementation_phase
+from services.dev.phases.execute_validation_phase import run as execute_validation_phase
+from services.dev.phases.finalize_result import run as finalize_result_phase
+from services.dev.phases.ingest_pm_plan import run as ingest_pm_plan_phase
+from services.dev.phases.prepare_execution_steps import run as prepare_execution_steps_phase
+from services.dev.types.dev_graph_state import DevGraphState
 from services.workspace.project_index import detect_stack_from_markers
 from shared.dev_schemas import DevChecklistItem, DevTask, derive_project_name
 
 
 DevAskFn = Callable[[str], str]
 LLMCorrectorFn = Callable[[Dict[str, Any]], str]
-
-
-class DevGraphState(TypedDict, total=False):
-    request_id: str
-    plan: Dict[str, Any]
-    handoff: Dict[str, Any]
-    scope_root: str
-    project_name: str
-    project_root: str
-    active_project_root: str
-    detected_stacks: List[str]
-    dev_preflight_plan: Dict[str, Any]
-    status: str
-    current_step: str
-    bootstrap_tasks: List[DevTask]
-    implementation_targets: List[Dict[str, str]]
-    validation_tasks: List[DevTask]
-    clarifications: List[Dict[str, str]]
-    logs: List[str]
-    touched_paths: List[str]
-    errors: List[str]
-    final_summary: str
-    ask_user: Any
-    llm_corrector: Any
-    retry_count: int
-    max_retries: int
-    last_error: str
-    attempt_history: List[Dict[str, Any]]
-    bootstrap_status: str
-    implementation_status: str
-    llm_calls_used: int
-    llm_call_budget: int
-    phase_status: Dict[str, str]
-    implementation_pass_statuses: List[str]
-    log_sink: Any
-    validation_status: str
-    root_resolution_evidence: Dict[str, Any]
-    llm_context_contract: Dict[str, Any]
-    internal_checklist: List[Dict[str, Any]]
-    checklist_index: Dict[str, int]
-    final_compile_tasks: List[DevTask]
-    final_compile_status: str
-    task_outcomes: List[Dict[str, Any]]
-    checklist_cursor: str
-    telemetry_events: List[Dict[str, Any]]
 
 
 class DevMasterGraph:
@@ -416,117 +382,11 @@ class DevMasterGraph:
 
     @staticmethod
     def _ingest_pm_plan(state: DevGraphState) -> DevGraphState:
-        state["current_step"] = "ingest_pm_plan"
-        DevMasterGraph._emit(state, "[PHASE_START] ingest_pm_plan")
-        handoff = state.get("handoff") or {}
-        if isinstance(handoff.get("task_outcomes"), list):
-            state["task_outcomes"] = [x for x in handoff.get("task_outcomes", []) if isinstance(x, dict)]
-        if isinstance(handoff.get("checklist_cursor"), str):
-            state["checklist_cursor"] = str(handoff.get("checklist_cursor", ""))
-        project_root = handoff.get("project_root")
-        if isinstance(project_root, str) and "/" in project_root:
-            normalized_root = project_root.replace("\\", "/").strip().lstrip("./")
-            state["project_root"] = normalized_root
-            state["project_name"] = normalized_root.rstrip("/").split("/")[-1]
-        else:
-            project_name = derive_project_name(state["plan"])
-            state["project_name"] = project_name
-            state["project_root"] = f"projects/{project_name}"
-        DevMasterGraph._emit(state, f"[INGEST] project='{state['project_name']}'")
-        plan = state.get("plan", {})
-        plan_hash = hashlib.sha1(json.dumps(plan, sort_keys=True).encode("utf-8")).hexdigest()[:16]
-        DevMasterGraph._emit_event(
-            state,
-            "plan_ingest",
-            project_name=state["project_name"],
-            project_root=state["project_root"],
-            plan_hash=plan_hash,
-            bootstrap_commands_count=len(plan.get("bootstrap_commands", [])) if isinstance(plan, dict) else 0,
-            target_files_count=len(plan.get("target_files", [])) if isinstance(plan, dict) else 0,
-            validation_count=len(plan.get("validation", [])) if isinstance(plan, dict) else 0,
-        )
-        state["phase_status"]["ingest_pm_plan"] = "completed"
-        return state
+        return ingest_pm_plan_phase(state, DevMasterGraph)
 
     @staticmethod
     def _derive_dev_todos(state: DevGraphState) -> DevGraphState:
-        state["current_step"] = "derive_dev_todos"
-        DevMasterGraph._emit(state, "[PHASE_START] derive_dev_todos")
-        plan = state["plan"]
-        handoff = state.get("handoff") or {}
-        bootstrap_tasks: List[DevTask] = []
-        validation_tasks: List[DevTask] = []
-        implementation_targets: List[Dict[str, str]] = []
-
-        handoff_steps = handoff.get("execution_steps")
-        if isinstance(handoff_steps, list) and len(handoff_steps) > 0:
-            for i, cmd in enumerate(handoff_steps, start=1):
-                if isinstance(cmd, dict):
-                    bootstrap_tasks.append(
-                        DevTask(
-                            id=f"handoff_{i}",
-                            description=str(cmd.get("purpose", "handoff step")),
-                            command=str(cmd.get("command", "")),
-                            cwd=str(cmd.get("cwd", ".")),
-                            kind="bootstrap",
-                        )
-                    )
-        else:
-            for i, cmd in enumerate(plan.get("bootstrap_commands", []), start=1):
-                if isinstance(cmd, dict):
-                    bootstrap_tasks.append(
-                        DevTask(
-                            id=f"bootstrap_{i}",
-                            description=str(cmd.get("purpose", "bootstrap step")),
-                            command=str(cmd.get("command", "")),
-                            cwd=str(cmd.get("cwd", ".")),
-                            kind="bootstrap",
-                        )
-                    )
-
-        for i, validation in enumerate(plan.get("validation", []), start=1):
-            if isinstance(validation, str):
-                validation_tasks.append(
-                    DevTask(
-                        id=f"validation_{i}",
-                        description=validation,
-                        command=None,
-                        cwd=".",
-                        kind="validation",
-                    )
-                )
-
-        for target in plan.get("target_files", []):
-            if not isinstance(target, dict):
-                continue
-            implementation_targets.append(
-                {
-                    "file_name": str(target.get("file_name", "")),
-                    "expected_path_hint": str(target.get("expected_path_hint", "")),
-                    "modification_type": str(target.get("modification_type", "")),
-                    "details": str(target.get("details", "")),
-                }
-            )
-
-        state["bootstrap_tasks"] = bootstrap_tasks
-        state["validation_tasks"] = validation_tasks
-        state["implementation_targets"] = implementation_targets
-        DevMasterGraph._emit(
-            state,
-            "[TODO] bootstrap_tasks="
-            f"{len(bootstrap_tasks)} implementation_targets={len(implementation_targets)} "
-            f"validation_tasks={len(validation_tasks)}",
-        )
-        DevMasterGraph._emit_event(
-            state,
-            "todo_derivation",
-            bootstrap_tasks=len(bootstrap_tasks),
-            implementation_targets=len(implementation_targets),
-            validation_tasks=len(validation_tasks),
-            restored_from_handoff=bool(isinstance(handoff_steps, list) and len(handoff_steps) > 0),
-        )
-        state["phase_status"]["derive_dev_todos"] = "completed"
-        return state
+        return derive_dev_todos_phase(state, DevMasterGraph)
 
     @staticmethod
     def _detect_stacks_for_root(project_dir: str) -> List[str]:
@@ -615,159 +475,15 @@ class DevMasterGraph:
 
     @staticmethod
     def _dev_preflight_planning(state: DevGraphState) -> DevGraphState:
-        state["current_step"] = "dev_preflight_planning"
-        DevMasterGraph._emit(state, "[PHASE_START] dev_preflight_planning")
-        project_root = str(state.get("project_root", f"projects/{state.get('project_name', 'project')}"))
-        rel = project_root.split("/", 1)[1] if project_root.startswith("projects/") else project_root
-        project_dir = os.path.join(state["scope_root"], rel)
-        os.makedirs(project_dir, exist_ok=True)
-        detected = DevMasterGraph._detect_stacks_for_root(project_dir)
-        if detected == ["generic"]:
-            stack_text_tokens: List[str] = []
-            for task in state.get("bootstrap_tasks", []):
-                if isinstance(task, DevTask):
-                    stack_text_tokens.append(str(task.command or ""))
-            plan_stack = state.get("plan", {}).get("stack", {})
-            if isinstance(plan_stack, dict):
-                stack_text_tokens.append(str(plan_stack.get("frontend", "")))
-                stack_text_tokens.append(str(plan_stack.get("backend", "")))
-            stack_text = " ".join(stack_text_tokens).lower()
-            if any(tok in stack_text for tok in ["npm", "pnpm", "yarn", "vite", "react", "next"]):
-                detected = ["node"]
-            elif any(tok in stack_text for tok in ["dotnet", "c#", "asp.net"]):
-                detected = ["dotnet"]
-            elif any(tok in stack_text for tok in ["python", "pip", "pytest", "django", "flask", "fastapi"]):
-                detected = ["python"]
-            elif any(tok in stack_text for tok in ["ruby", "rails", "bundler", "rake"]):
-                detected = ["ruby"]
-        state["detected_stacks"] = detected
-        state["active_project_root"] = project_dir
-
-        raw_validation_requirements = [
-            str(x).strip()
-            for x in state.get("plan", {}).get("validation", [])
-            if isinstance(x, str) and str(x).strip()
-        ]
-        validation_commands: List[str] = []
-        unresolved_validation_requirements: List[str] = []
-        for requirement in raw_validation_requirements:
-            cmd = DevMasterGraph._extract_validation_command(requirement)
-            if cmd:
-                validation_commands.append(cmd)
-            else:
-                unresolved_validation_requirements.append(requirement)
-
-        if not validation_commands and not raw_validation_requirements:
-            validation_commands = DevMasterGraph._default_validation_commands(detected)
-        final_compile_commands = DevMasterGraph._infer_final_compile_commands(
-            project_dir=project_dir,
-            stacks=detected,
-            validation_commands=validation_commands,
-        )
-
-        state["dev_preflight_plan"] = {
-            "os": platform.system(),
-            "active_project_root": project_dir,
-            "detected_stacks": detected,
-            "validation_commands": validation_commands,
-            "final_compile_commands": final_compile_commands,
-            "raw_validation_requirements": raw_validation_requirements,
-            "unresolved_validation_requirements": unresolved_validation_requirements,
-        }
-        state["validation_tasks"] = [
-            DevTask(
-                id=f"validation_cmd_{idx+1}",
-                description=f"run validation command: {cmd}",
-                command=cmd,
-                cwd=project_root,
-                kind="validation",
-            )
-            for idx, cmd in enumerate(validation_commands)
-        ]
-        state["final_compile_tasks"] = [
-            DevTask(
-                id=f"final_compile_{idx+1}",
-                description=f"run final compile gate: {cmd}",
-                command=cmd,
-                cwd=project_root,
-                kind="validation",
-            )
-            for idx, cmd in enumerate(final_compile_commands)
-        ]
-        DevMasterGraph._build_internal_checklist(state)
-        DevMasterGraph._emit(
-            state,
-            f"[PREFLIGHT] os={state['dev_preflight_plan']['os']} stacks={detected} active_root={project_dir}",
-        )
-        if validation_commands:
-            DevMasterGraph._emit(state, f"[PREFLIGHT] validation_commands={validation_commands}")
-        else:
-            DevMasterGraph._emit(state, "[PREFLIGHT] no executable validation commands inferred")
-        if unresolved_validation_requirements:
-            DevMasterGraph._emit(
-                state,
-                f"[PREFLIGHT] unresolved_validation_requirements={unresolved_validation_requirements}",
-            )
-        if final_compile_commands:
-            DevMasterGraph._emit(state, f"[PREFLIGHT] final_compile_commands={final_compile_commands}")
-        else:
-            DevMasterGraph._emit(state, "[PREFLIGHT] no terminating compile commands inferred")
-        DevMasterGraph._emit_event(
-            state,
-            "preflight_validation_inference",
-            os=state["dev_preflight_plan"]["os"],
-            active_project_root=DevMasterGraph._relpath_safe(state, project_dir),
-            detected_stacks=detected,
-            validation_commands=validation_commands,
-            unresolved_validation_requirements=unresolved_validation_requirements,
-            final_compile_commands=final_compile_commands,
-        )
-        state["phase_status"]["dev_preflight_planning"] = "completed"
-        return state
+        return dev_preflight_planning_phase(state, DevMasterGraph)
 
     @staticmethod
     def _ask_cli_clarifications_if_needed(state: DevGraphState) -> DevGraphState:
-        state["current_step"] = "ask_cli_clarifications_if_needed"
-        DevMasterGraph._emit(state, "[PHASE_START] ask_cli_clarifications_if_needed")
-        plan = state["plan"]
-        ask_user = state.get("ask_user")
-
-        if not callable(ask_user):
-            DevMasterGraph._emit(state, "[CLARIFY] no CLI callback provided")
-            state["phase_status"]["ask_cli_clarifications_if_needed"] = "completed"
-            return state
-
-        project_mode = plan.get("project_mode")
-        path_hint = None
-        project_ref = plan.get("project_ref")
-        if isinstance(project_ref, dict):
-            path_hint = project_ref.get("path_hint")
-
-        if project_mode == "existing_project" and not path_hint:
-            question = (
-                "Developer needs path for existing project. "
-                "Where inside ./projects should work happen?"
-            )
-            answer = ask_user(question).strip()
-            state["clarifications"].append({"question": question, "answer": answer})
-            DevMasterGraph._emit(state, "[CLARIFY] existing project path clarified via CLI")
-        else:
-            DevMasterGraph._emit(state, "[CLARIFY] no additional questions needed")
-        state["phase_status"]["ask_cli_clarifications_if_needed"] = "completed"
-        return state
+        return ask_cli_clarifications_phase(state, DevMasterGraph)
 
     @staticmethod
     def _prepare_execution_steps(state: DevGraphState) -> DevGraphState:
-        state["current_step"] = "prepare_execution_steps"
-        DevMasterGraph._emit(state, "[PHASE_START] prepare_execution_steps")
-        project_root = str(state.get("project_root", f"projects/{state.get('project_name', 'project')}"))
-        rel = project_root.split("/", 1)[1] if project_root.startswith("projects/") else project_root
-        project_dir = os.path.join(state["scope_root"], rel)
-        os.makedirs(project_dir, exist_ok=True)
-        state["touched_paths"].append(project_dir)
-        DevMasterGraph._emit(state, f"[PREPARE] ensured project dir {project_dir}")
-        state["phase_status"]["prepare_execution_steps"] = "completed"
-        return state
+        return prepare_execution_steps_phase(state, DevMasterGraph)
 
     @staticmethod
     def _is_within_scope(scope_root: str, candidate_path: str) -> bool:
@@ -996,7 +712,7 @@ class DevMasterGraph:
             return hashlib.sha1(fh.read()).hexdigest()
 
     @staticmethod
-    def _execute_bootstrap_phase(state: DevGraphState) -> DevGraphState:
+    def _execute_bootstrap_phase_impl(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "execute_bootstrap_phase"
         DevMasterGraph._emit(state, "[PHASE_START] execute_bootstrap_phase")
         DevMasterGraph._emit(state, "[PHASE] bootstrap")
@@ -1604,7 +1320,7 @@ class DevMasterGraph:
         return findings
 
     @staticmethod
-    def _execute_implementation_phase(state: DevGraphState) -> DevGraphState:
+    def _execute_implementation_phase_impl(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "execute_implementation_phase"
         DevMasterGraph._emit(state, "[PHASE_START] execute_implementation_phase")
         DevMasterGraph._emit(state, "[PHASE] implementation")
@@ -1811,7 +1527,7 @@ class DevMasterGraph:
         return state
 
     @staticmethod
-    def _execute_validation_phase(state: DevGraphState) -> DevGraphState:
+    def _execute_validation_phase_impl(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "execute_validation_phase"
         DevMasterGraph._emit(state, "[PHASE_START] execute_validation_phase")
         if state.get("bootstrap_status") == "failed" or state.get("implementation_status") == "failed":
@@ -1923,7 +1639,7 @@ class DevMasterGraph:
         return state
 
     @staticmethod
-    def _execute_final_compile_gate(state: DevGraphState) -> DevGraphState:
+    def _execute_final_compile_gate_impl(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "execute_final_compile_gate"
         DevMasterGraph._emit(state, "[PHASE_START] execute_final_compile_gate")
         if (
@@ -2019,7 +1735,27 @@ class DevMasterGraph:
         return state
 
     @staticmethod
+    def _execute_bootstrap_phase(state: DevGraphState) -> DevGraphState:
+        return execute_bootstrap_phase(state, DevMasterGraph)
+
+    @staticmethod
+    def _execute_implementation_phase(state: DevGraphState) -> DevGraphState:
+        return execute_implementation_phase(state, DevMasterGraph)
+
+    @staticmethod
+    def _execute_validation_phase(state: DevGraphState) -> DevGraphState:
+        return execute_validation_phase(state, DevMasterGraph)
+
+    @staticmethod
+    def _execute_final_compile_gate(state: DevGraphState) -> DevGraphState:
+        return execute_final_compile_gate(state, DevMasterGraph)
+
+    @staticmethod
     def _finalize_result(state: DevGraphState) -> DevGraphState:
+        return finalize_result_phase(state, DevMasterGraph)
+
+    @staticmethod
+    def _finalize_result_impl(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "finalize_result"
         DevMasterGraph._emit(state, "[PHASE_START] finalize_result")
         if state.get("status") in {"bootstrap_failed", "implementation_failed"}:
