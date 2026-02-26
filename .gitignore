@@ -1,4 +1,6 @@
 venv/
 .venv/
 __pycache__/
-/.orchestrator/
+.projects
+./projects
+/projects

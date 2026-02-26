@@ -1,52 +1,247 @@
 schema: HandoffPackYAML/v1
 meta:
-  request_id: req-checklist-2
-  generated_at: '2026-02-26T00:43:41.759475+00:00'
+  request_id: 5650cfc6-4a61-4fca-8e6f-7c8d6e614c3c
+  generated_at: '2026-02-26T13:19:12.870404+00:00'
 goal:
   constraints:
-  - Do not push
+  - Frontend must fetch weather data directly from a public API (no backend proxy)
+  - Use Angular CLI for project scaffolding
+  - Store API key in environment.ts and exclude it from version control
   validation:
-  - Build passes
+  - Run ng serve and verify the app starts without errors
+  - Enter a city name or allow geolocation and confirm weather data displays correctly
+  - Verify HttpClient requests succeed and responses are parsed into the UI
 workspace:
-  project_root: projects/calculator
+  project_root: projects/weather-app
   workspace_context:
-    projects_root: C:/Users/Tom/Documents/Repositories/ai-orchestrator/projects
+    projects_root: projects
     projects: []
   path_aliases:
-    project_root: projects/calculator
-    project_name: calculator
+    project_root: projects/weather-app
+    project_name: weather-app
 roles:
   pm_checklist:
     project_scope: new_project
-    architecture: frontend_only
-    backend_required: 'no'
+    architecture: custom
+    backend_required: 'yes'
     database_required: 'no'
-  clarifications: []
+  clarifications:
+  - question: Do you prefer the Angular frontend to fetch weather data directly from
+      a public API (e.g., OpenWeatherMap), or should we implement a backend service
+      to proxy the API requests?
+    answer: Yes, angular frontend should fetch the data directly form an api
+  - question: "We\u2019re planning to create a new Angular project in a directory\
+      \ like\_projects/weather-app; does that name work for you, or would you prefer\
+      \ a different project directory name?"
+    answer: Yes go for it
 execution:
   steps:
-  - cwd: projects/calculator/front-end
-    command: python -c "print('bootstrap')"
-    purpose: bootstrap
+  - cwd: projects/weather-app
+    command: npx @angular/cli new weather-app --directory . --routing=true --style=css
+      --skip-install
+    purpose: Scaffold a new Angular application without installing dependencies
+  - cwd: projects/weather-app
+    command: npm install
+    purpose: Install Angular and project dependencies
   structure_plan:
-  - path: projects/calculator
+  - path: projects
     kind: required
   command_policy:
     risk_confirmation: true
     non_interactive: true
-  internal_checklist: []
-  task_outcomes: []
+  internal_checklist:
+  - id: todo_handoff_1
+    kind: bootstrap
+    status: completed
+    description: Scaffold a new Angular application without installing dependencies
+    task_ref: handoff_1
+    target_ref: null
+    depends_on: []
+    success_criteria:
+    - command exits with code 0
+    mandatory: true
+    evidence:
+    - phase: bootstrap
+      task_id: handoff_1
+    - &id001
+      task_id: handoff_1
+      status: completed
+      command: npx --yes @angular/cli new weather-app --directory . --routing=true
+        --style=css --skip-install
+      cwd: /home/vboxuser/Documents/repositories/ai-orchestrator/projects/weather-app
+      category: none
+      exit_code: 0
+      elapsed_ms: 168722
+      run_mode: terminating
+      evidence:
+        attempts: 1
+        smoke_ready: false
+  - id: todo_handoff_2
+    kind: bootstrap
+    status: completed
+    description: Install Angular and project dependencies
+    task_ref: handoff_2
+    target_ref: null
+    depends_on: []
+    success_criteria:
+    - command exits with code 0
+    mandatory: true
+    evidence:
+    - phase: bootstrap
+      task_id: handoff_2
+    - &id002
+      task_id: handoff_2
+      status: completed
+      command: npm install
+      cwd: /home/vboxuser/Documents/repositories/ai-orchestrator/projects/weather-app
+      category: package_manager_mismatch
+      exit_code: 0
+      elapsed_ms: 202612
+      run_mode: terminating
+      evidence:
+        attempts: 1
+        smoke_ready: false
+  - id: todo_impl_1
+    kind: implementation
+    status: failed
+    description: implement angular.json
+    task_ref: null
+    target_ref: projects/weather-app
+    depends_on: []
+    success_criteria:
+    - target file mutated with evidence
+    mandatory: true
+    evidence:
+    - phase: implementation
+      pass: 0
+    - phase: implementation
+      error: 'Expected target missing and discovery failed: projects/weather-app'
+  - id: todo_impl_2
+    kind: implementation
+    status: failed
+    description: implement src/app/app.module.ts
+    task_ref: null
+    target_ref: projects/weather-app
+    depends_on: []
+    success_criteria:
+    - target file mutated with evidence
+    mandatory: true
+    evidence:
+    - phase: implementation
+      pass: 0
+    - phase: implementation
+      error: 'Expected target missing and discovery failed: projects/weather-app'
+  - id: todo_impl_3
+    kind: implementation
+    status: failed
+    description: implement src/app/weather.service.ts
+    task_ref: null
+    target_ref: projects/weather-app
+    depends_on: []
+    success_criteria:
+    - target file mutated with evidence
+    mandatory: true
+    evidence:
+    - phase: implementation
+      pass: 0
+    - phase: implementation
+      error: 'Expected target missing and discovery failed: projects/weather-app'
+  - id: todo_impl_4
+    kind: implementation
+    status: failed
+    description: implement src/app/weather.component.ts
+    task_ref: null
+    target_ref: projects/weather-app
+    depends_on: []
+    success_criteria:
+    - target file mutated with evidence
+    mandatory: true
+    evidence:
+    - phase: implementation
+      pass: 0
+    - phase: implementation
+      error: 'Expected target missing and discovery failed: projects/weather-app'
+  - id: todo_impl_5
+    kind: implementation
+    status: failed
+    description: implement src/app/weather.component.html
+    task_ref: null
+    target_ref: projects/weather-app
+    depends_on: []
+    success_criteria:
+    - target file mutated with evidence
+    mandatory: true
+    evidence:
+    - phase: implementation
+      pass: 0
+    - phase: implementation
+      error: 'Expected target missing and discovery failed: projects/weather-app'
+  - id: todo_impl_6
+    kind: implementation
+    status: failed
+    description: implement src/environments/environment.ts
+    task_ref: null
+    target_ref: projects/weather-app
+    depends_on: []
+    success_criteria:
+    - target file mutated with evidence
+    mandatory: true
+    evidence:
+    - phase: implementation
+      pass: 0
+    - phase: implementation
+      error: 'Expected target missing and discovery failed: projects/weather-app'
+  - id: todo_final_compile_1
+    kind: final_compile
+    status: pending
+    description: 'run final compile gate: npm run build'
+    task_ref: final_compile_1
+    target_ref: null
+    depends_on:
+    - todo_handoff_1
+    - todo_handoff_2
+    - todo_impl_1
+    - todo_impl_2
+    - todo_impl_3
+    - todo_impl_4
+    - todo_impl_5
+    - todo_impl_6
+    success_criteria:
+    - compile/build gate command completed
+    mandatory: true
+    evidence: []
+  task_outcomes:
+  - *id001
+  - *id002
 resume:
-  selected_project_root: projects/calculator
-  workspace_snapshot_hash: 242042d18bdd07cb0817511a370f3d2f6d0e9093
-  pending_tasks: []
+  selected_project_root: projects/weather-app
+  workspace_snapshot_hash: 5113450b7a6f16abf9da7e44246526b1d7d1c4ec
+  pending_tasks:
+  - todo_impl_1
+  - todo_impl_2
+  - todo_impl_3
+  - todo_impl_4
+  - todo_impl_5
+  - todo_impl_6
+  - todo_final_compile_1
   checkpoints: []
-  checklist_cursor: ''
+  checklist_cursor: todo_impl_6
 memory:
   attempted_commands: []
   errors: []
 dev_preflight_plan:
-  status: pending
-  detected_stacks: []
+  os: Linux
+  active_project_root: /home/vboxuser/Documents/repositories/ai-orchestrator/projects/weather-app
+  detected_stacks:
+  - node
   validation_commands: []
-  final_compile_commands: []
-  active_project_root: ''
+  final_compile_commands:
+  - npm run build
+  raw_validation_requirements:
+  - Run ng serve and verify the app starts without errors
+  - Enter a city name or allow geolocation and confirm weather data displays correctly
+  - Verify HttpClient requests succeed and responses are parsed into the UI
+  unresolved_validation_requirements:
+  - Run ng serve and verify the app starts without errors
+  - Enter a city name or allow geolocation and confirm weather data displays correctly
+  - Verify HttpClient requests succeed and responses are parsed into the UI

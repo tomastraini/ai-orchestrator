@@ -1,0 +1,59 @@
+[
+  {
+    "task_id": "handoff_1",
+    "status": "completed",
+    "command": "npm create vite@latest weather-app -- --template react-ts",
+    "cwd": "/home/vboxuser/Documents/repositories/ai-orchestrator/projects",
+    "category": "package_manager_mismatch",
+    "exit_code": 0,
+    "elapsed_ms": 932,
+    "run_mode": "terminating",
+    "evidence": {
+      "attempts": 1,
+      "smoke_ready": false
+    }
+  },
+  {
+    "task_id": "handoff_2",
+    "status": "completed",
+    "command": "npm install",
+    "cwd": "/home/vboxuser/Documents/repositories/ai-orchestrator/projects/weather-app",
+    "category": "package_manager_mismatch",
+    "exit_code": 0,
+    "elapsed_ms": 30546,
+    "run_mode": "terminating",
+    "evidence": {
+      "attempts": 1,
+      "smoke_ready": false
+    }
+  },
+  {
+    "task_id": "handoff_3",
+    "status": "completed",
+    "command": "npm run dev",
+    "cwd": "/home/vboxuser/Documents/repositories/ai-orchestrator/projects/weather-app",
+    "category": "none",
+    "exit_code": 0,
+    "elapsed_ms": 2527,
+    "run_mode": "service_smoke",
+    "evidence": {
+      "attempts": 1,
+      "smoke_ready": true
+    }
+  },
+  {
+    "task_id": "final_compile_1",
+    "status": "failed",
+    "command": "npm run build",
+    "cwd": "/home/vboxuser/Documents/repositories/ai-orchestrator/projects/weather-app",
+    "category": "unknown",
+    "exit_code": 2,
+    "elapsed_ms": 2110,
+    "run_mode": "terminating",
+    "evidence": {
+      "attempted_commands": [
+        "npm run build"
+      ]
+    }
+  }
+]
