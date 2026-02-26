@@ -16,7 +16,7 @@ from services.dev.command_policy import (
     normalize_non_interactive,
 )
 from services.dev.types.executor_types import ExecuteDevTasksResult, RecoveryRunResult, RunOnceResult
-from shared.pathing import _collapse_nested_projects_segments
+from shared.pathing import _collapse_nested_projects_segments, canonicalize_scope_path
 from shared.dev_schemas import DevTask
 
 
@@ -66,8 +66,8 @@ def _resolve_cwd(scope_root: str, raw_cwd: str) -> str:
     raw = raw_norm or "."
 
     if os.path.isabs(raw):
-        return _assert_within_scope(scope_root, raw)
-    return _assert_within_scope(scope_root, os.path.join(scope_root, raw))
+        return _assert_within_scope(scope_root, canonicalize_scope_path(scope_root, raw))
+    return _assert_within_scope(scope_root, canonicalize_scope_path(scope_root, os.path.join(scope_root, raw)))
 
 
 def _is_blocked_command(command: str) -> bool:
@@ -156,12 +156,24 @@ def classify_failure(stdout: str, stderr: str, exit_code: int) -> str:
         return "interactive_prompt"
     if "not recognized as an internal or external command" in text or "command not found" in text:
         return "command_not_found"
-    if "no such file or directory" in text or "cannot find the path specified" in text:
+    if "no such file or directory" in text or "cannot find the path specified" in text or "enoent" in text:
         return "path_issue"
-    if "error ts" in text or "typescript" in text or "esbuild" in text or "vite build" in text:
-        return "compile_error"
+    if (
+        "syntaxerror" in text
+        or "unexpected token" in text
+        or "parse error" in text
+        or "error ts" in text
+        or "typescript" in text
+        or "esbuild" in text
+        or "vite build" in text
+    ):
+        return "syntax_or_compile_error"
     if "cannot find module" in text:
-        return "dependency_or_module_error"
+        return "module_resolution_error"
+    if "test failed" in text or "assertionerror" in text or "failing tests" in text:
+        return "test_failure"
+    if "config" in text or "tsconfig" in text or "package.json" in text or "pyproject" in text:
+        return "config_error"
     if "package manager" in text or "npm" in text or "yarn" in text or "pnpm" in text:
         return "package_manager_mismatch"
     if exit_code != 0:

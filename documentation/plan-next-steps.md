@@ -95,6 +95,10 @@ Detailed remediation execution plan:
 
 ## Milestone C: Persistent Repository Memory
 
+Detailed execution and runtime-failure recovery handoff:
+
+- `documentation/milestones/milestone-c-angular-runtime-recovery.md`
+
 ### Deliverables
 
 - Extend Dev graph state with persistent memory for:

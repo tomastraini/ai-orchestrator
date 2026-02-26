@@ -471,6 +471,102 @@ class DevMasterGraphTests(unittest.TestCase):
         categories = [str(event.get("category", "")) for event in state.get("telemetry_events", []) if isinstance(event, dict)]
         self.assertIn("post_handoff_index_refresh", categories, msg=str(categories))
 
+    def test_intent_alignment_blocks_component_write_into_entrypoint(self) -> None:
+        graph = DevMasterGraph()
+        plan = self._sample_plan()
+        plan["target_files"] = [
+            {
+                "file_name": "app.component.ts",
+                "expected_path_hint": "projects/calc/src/main.ts",
+                "modification_type": "update",
+                "details": "Update component behavior in app component",
+                "creation_policy": "must_exist",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "calc", "src"), exist_ok=True)
+            with open(os.path.join(tmp, "calc", "src", "main.ts"), "w", encoding="utf-8") as fh:
+                fh.write("export {};\n")
+            state = graph.run(
+                request_id="intent-guardrail-1",
+                plan=plan,
+                scope_root=tmp,
+                ask_user=lambda _: "n/a",
+            )
+        self.assertEqual(state.get("status"), "implementation_failed")
+        self.assertTrue(
+            any("Intent-to-target alignment failed" in err for err in state.get("errors", [])),
+            msg=str(state.get("errors", [])),
+        )
+
+    def test_resolve_target_path_collapses_nested_duplicate_segments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            nested = os.path.join(tmp, "projects", "calc", "projects", "calc")
+            os.makedirs(os.path.join(tmp, "projects", "calc", "src"), exist_ok=True)
+            resolved = DevMasterGraph._resolve_target_file_path(
+                scope_root=tmp,
+                project_root="projects/calc",
+                active_project_root=nested,
+                expected_path_hint="projects/calc/src/App.tsx",
+                file_name="App.tsx",
+            )
+            self.assertIn("/projects/calc/src/App.tsx", resolved.replace("\\", "/"))
+            self.assertNotIn("/projects/calc/projects/calc/", resolved.replace("\\", "/"))
+
+    def test_validation_nl_requirement_maps_to_executable_for_known_stack(self) -> None:
+        command = DevMasterGraph._extract_validation_command(
+            "TypeScript compilation yields no type errors",
+            stacks=["node"],
+        )
+        self.assertEqual(command, "npm run build")
+
+    def test_discovery_penalizes_previously_rejected_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            active_root = os.path.join(tmp, "calc")
+            os.makedirs(os.path.join(active_root, "src"), exist_ok=True)
+            os.makedirs(os.path.join(active_root, "app"), exist_ok=True)
+            with open(os.path.join(active_root, "src", "main.ts"), "w", encoding="utf-8") as fh:
+                fh.write("export const srcMain = true;\n")
+            with open(os.path.join(active_root, "app", "main.ts"), "w", encoding="utf-8") as fh:
+                fh.write("export const appMain = true;\n")
+            state = {
+                "scope_root": tmp,
+                "current_step": "execute_implementation_phase",
+                "repository_memory": {
+                    "candidate_rejections": [
+                        {
+                            "data": {
+                                "candidate_path": "src/main.ts",
+                            }
+                        }
+                    ]
+                },
+            }
+            index = DevMasterGraph._build_active_root_file_index(active_root)
+            resolved = DevMasterGraph._discover_existing_path(
+                active_root,
+                "projects/calc/src/main.ts",
+                "main.ts",
+                project_root="projects/calc",
+                file_index=index,
+                state=state,  # type: ignore[arg-type]
+            )
+            self.assertTrue(resolved.replace("\\", "/").endswith("/app/main.ts"), msg=resolved)
+
+    def test_compile_taxonomy_classification_is_structured(self) -> None:
+        taxonomy = DevMasterGraph._classify_diagnostic_taxonomy(
+            [
+                {
+                    "task_id": "final_compile_1",
+                    "stdout": "",
+                    "stderr": "SyntaxError: unexpected token at src/main.ts:4:1",
+                    "exit_code": 1,
+                    "category": "syntax_or_compile_error",
+                }
+            ]
+        )
+        self.assertEqual(taxonomy[0]["taxonomy"], "syntax")
+
 
 if __name__ == "__main__":
     unittest.main()

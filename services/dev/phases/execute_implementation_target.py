@@ -4,7 +4,7 @@ import difflib
 import os
 from typing import Any, Dict, Optional, Tuple
 
-from services.dev.edit_validator import validate_post_apply, validate_pre_apply
+from services.dev.edit_validator import validate_intent_alignment, validate_post_apply, validate_pre_apply
 from services.dev.types.dev_graph_state import DevGraphState
 
 
@@ -38,6 +38,64 @@ def run(
         file_name=file_name,
     )
     key = f"todo_impl_{idx}"
+    graph_cls._remember(
+        state,
+        "files_inspected",
+        {
+            "target_index": idx,
+            "expected_path_hint": expected,
+            "selected_path": graph_cls._relpath_safe(state, safe_target),
+            "pass_index": pass_index,
+        },
+    )
+    intent_alignment = validate_intent_alignment(
+        expected_path_hint=expected,
+        file_name=file_name,
+        details=details,
+        selected_path=safe_target,
+    )
+    graph_cls._emit_event(
+        state,
+        "intent_alignment_check",
+        pass_index=pass_index,
+        target_index=idx,
+        expected_path_hint=expected,
+        selected_path=graph_cls._relpath_safe(state, safe_target),
+        passed=bool(intent_alignment.get("passed", False)),
+        confidence=float(intent_alignment.get("confidence", 0.0)),
+        expected_target_class=intent_alignment.get("expected_target_class", ""),
+        selected_target_class=intent_alignment.get("selected_target_class", ""),
+        errors=intent_alignment.get("errors", []),
+        warnings=intent_alignment.get("warnings", []),
+    )
+    graph_cls._remember(
+        state,
+        "candidate_attempts",
+        {
+            "target_index": idx,
+            "expected_path_hint": expected,
+            "candidate_path": graph_cls._relpath_safe(state, safe_target),
+            "confidence": float(intent_alignment.get("confidence", 0.0)),
+            "pass_index": pass_index,
+            "selection_reason": "resolved_target_path",
+        },
+    )
+    if not bool(intent_alignment.get("passed", False)):
+        graph_cls._remember(
+            state,
+            "candidate_rejections",
+            {
+                "target_index": idx,
+                "expected_path_hint": expected,
+                "candidate_path": graph_cls._relpath_safe(state, safe_target),
+                "reason": "intent_target_class_mismatch",
+                "pass_index": pass_index,
+            },
+        )
+        raise RuntimeError(
+            "Intent-to-target alignment failed: "
+            f"expected={intent_alignment.get('expected_target_class')} selected={intent_alignment.get('selected_target_class')}"
+        )
     if key not in target_proofs:
         target_proofs[key] = {
             "before_hash": graph_cls._file_sha1(safe_target),
@@ -69,6 +127,18 @@ def run(
         checks=pre_check.get("checks", []),
     )
     if not bool(pre_check.get("passed", False)):
+        graph_cls._remember(
+            state,
+            "candidate_rejections",
+            {
+                "target_index": idx,
+                "expected_path_hint": expected,
+                "candidate_path": graph_cls._relpath_safe(state, safe_target),
+                "reason": "pre_apply_check_failed",
+                "errors": pre_check.get("errors", []),
+                "pass_index": pass_index,
+            },
+        )
         raise RuntimeError(f"Edit pre-check failed for {expected}: {pre_check.get('errors', [])}")
 
     action, action_note, resolved_target = graph_cls._apply_target_in_pass(
@@ -140,8 +210,31 @@ def run(
         if action == "missing_expected_file":
             raise RuntimeError(f"Expected target missing and discovery failed: {expected}")
     if action == "low_signal_update_rejected":
+        graph_cls._remember(
+            state,
+            "candidate_rejections",
+            {
+                "target_index": idx,
+                "expected_path_hint": expected,
+                "candidate_path": graph_cls._relpath_safe(state, resolved_target),
+                "reason": "low_signal_update_rejected",
+                "pass_index": pass_index,
+            },
+        )
         raise RuntimeError(f"Low-signal update rejected for {resolved_target}")
     if action == "invalid_operation":
+        graph_cls._remember(
+            state,
+            "candidate_rejections",
+            {
+                "target_index": idx,
+                "expected_path_hint": expected,
+                "candidate_path": graph_cls._relpath_safe(state, resolved_target),
+                "reason": "invalid_operation",
+                "note": action_note,
+                "pass_index": pass_index,
+            },
+        )
         raise RuntimeError(f"Invalid operation for target {expected}: {action_note}")
 
     target_proofs[key]["after_hash"] = graph_cls._file_sha1(resolved_target)
@@ -174,6 +267,18 @@ def run(
         checks=post_check.get("checks", []),
     )
     if not bool(post_check.get("passed", False)):
+        graph_cls._remember(
+            state,
+            "candidate_rejections",
+            {
+                "target_index": idx,
+                "expected_path_hint": expected,
+                "candidate_path": graph_cls._relpath_safe(state, resolved_target),
+                "reason": "post_apply_check_failed",
+                "errors": post_check.get("errors", []),
+                "pass_index": pass_index,
+            },
+        )
         raise RuntimeError(f"Edit post-check failed for {expected}: {post_check.get('errors', [])}")
     diff_preview = "".join(
         difflib.unified_diff(

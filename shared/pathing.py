@@ -24,9 +24,36 @@ def _collapse_nested_projects_segments(path: str) -> str:
     # Prevent accidental nesting like projects/foo/projects/foo.
     if len(trimmed) >= 4:
         for idx in range(2, len(trimmed) - 1):
-            if trimmed[idx] == "projects":
-                return "/".join(trimmed[:2])
+            if (
+                trimmed[idx] == "projects"
+                and (idx + 1) < len(trimmed)
+                and trimmed[1].casefold() == trimmed[idx + 1].casefold()
+            ):
+                preserved_tail = trimmed[idx + 2 :]
+                return "/".join(trimmed[:2] + preserved_tail)
     return "/".join(trimmed)
+
+
+def collapse_duplicate_tail_segments(path: str) -> str:
+    normalized = normalize_rel_path(path)
+    parts = [p for p in normalized.split("/") if p]
+    if len(parts) < 2:
+        return normalized
+    collapsed: list[str] = []
+    for part in parts:
+        if collapsed and collapsed[-1].casefold() == part.casefold():
+            continue
+        collapsed.append(part)
+    return "/".join(collapsed)
+
+
+def canonicalize_scope_path(scope_root: str, candidate_path: str) -> str:
+    scope_abs = os.path.abspath(os.path.normpath(scope_root))
+    raw_abs = os.path.abspath(os.path.normpath(candidate_path))
+    raw_rel = os.path.relpath(raw_abs, scope_abs).replace("\\", "/")
+    rel_collapsed = _collapse_nested_projects_segments(raw_rel)
+    canonical_abs = os.path.abspath(os.path.join(scope_abs, rel_collapsed))
+    return canonical_abs
 
 
 def canonical_projects_path(path: Optional[str], default_path: str) -> str:

@@ -45,8 +45,14 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
     validation_commands: List[str] = []
     unresolved_validation_requirements: List[str] = []
     for requirement in raw_validation_requirements:
-        cmd = graph_cls._extract_validation_command(requirement)
+        cmd = graph_cls._extract_validation_command(requirement, stacks=detected)
         if cmd:
+            lower_cmd = cmd.lower().strip()
+            if any(lower_cmd.startswith(prefix) for prefix in ["npm ", "pnpm ", "yarn "]):
+                package_json = os.path.join(project_dir, "package.json")
+                if not os.path.exists(package_json):
+                    unresolved_validation_requirements.append(requirement)
+                    continue
             validation_commands.append(cmd)
         else:
             unresolved_validation_requirements.append(requirement)
@@ -117,5 +123,15 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
         final_compile_commands=final_compile_commands,
     )
     state["phase_status"]["dev_preflight_planning"] = "completed"
+    graph_cls._remember(
+        state,
+        "validation_inference",
+        {
+            "validation_commands": validation_commands,
+            "unresolved_validation_requirements": unresolved_validation_requirements,
+            "raw_validation_requirements": raw_validation_requirements,
+            "detected_stacks": detected,
+        },
+    )
     return state
 

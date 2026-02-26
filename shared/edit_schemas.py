@@ -18,6 +18,9 @@ class EditValidationResult(TypedDict, total=False):
     checks: List[str]
     warnings: List[str]
     errors: List[str]
+    confidence: float
+    expected_target_class: str
+    selected_target_class: str
 
 
 class EditResult(TypedDict, total=False):

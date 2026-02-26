@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from langgraph.graph import END, START, StateGraph
 
 from services.dev.dev_executor import execute_dev_tasks, execute_single_recovery_command
+from services.dev.edit_validator import validate_intent_alignment
 from services.dev.phases.ask_cli_clarifications import run as ask_cli_clarifications_phase
 from services.dev.phases.derive_dev_todos import run as derive_dev_todos_phase
 from services.dev.phases.dev_preflight_planning import run as dev_preflight_planning_phase
@@ -29,6 +30,7 @@ from services.workspace.cognition.scaffold_probe import probe_scaffold_layout
 from services.workspace.cognition.snapshot_store import persist_cognition_snapshot
 from services.workspace.project_index import build_cognition_index, detect_stack_from_markers, rank_candidate_files, scan_workspace_context
 from shared.dev_schemas import DevChecklistItem, DevTask, derive_project_name
+from shared.pathing import canonicalize_scope_path
 
 
 DevAskFn = Callable[[str], str]
@@ -36,6 +38,20 @@ LLMCorrectorFn = Callable[[Dict[str, Any]], str]
 
 
 class DevMasterGraph:
+    MEMORY_LIMITS = {
+        "files_inspected": 200,
+        "symbols_discovered": 300,
+        "assumptions": 120,
+        "candidate_attempts": 240,
+        "candidate_rejections": 240,
+        "correction_attempts": 120,
+        "command_failures": 160,
+        "diagnostic_file_refs": 120,
+        "validation_inference": 120,
+        "attempted_commands": 100,
+        "errors": 100,
+        "touched_paths": 200,
+    }
     VALIDATION_COMMAND_PREFIXES = (
         "npm ",
         "pnpm ",
@@ -140,7 +156,7 @@ class DevMasterGraph:
             "repository_memory": (
                 dict(handoff.get("memory", {}))
                 if isinstance(handoff, dict) and isinstance(handoff.get("memory"), dict)
-                else {"attempted_commands": [], "errors": [], "touched_paths": []}
+                else DevMasterGraph._default_repository_memory()
             ),
             "checklist_cursor": "",
             "llm_calls_used": 0,
@@ -164,7 +180,18 @@ class DevMasterGraph:
             "llm_context_contract": {},
             "target_resolution_evidence": {},
             "capability_gaps": [],
+            "reliability_metrics": {},
         }
+        initial_state["repository_memory"] = DevMasterGraph._trim_repository_memory(
+            {
+                **DevMasterGraph._default_repository_memory(),
+                **(
+                    initial_state.get("repository_memory", {})
+                    if isinstance(initial_state.get("repository_memory"), dict)
+                    else {}
+                ),
+            }
+        )
         result = self._compiled_graph.invoke(initial_state)
         result.pop("ask_user", None)
         result.pop("llm_corrector", None)
@@ -217,6 +244,86 @@ class DevMasterGraph:
         }
         state.setdefault("telemetry_events", []).append(event)
         DevMasterGraph._emit(state, f"[EVENT] {json.dumps(event, sort_keys=True)}")
+
+    @staticmethod
+    def _default_repository_memory() -> Dict[str, Any]:
+        return {
+            "files_inspected": [],
+            "symbols_discovered": [],
+            "assumptions": [],
+            "candidate_attempts": [],
+            "candidate_rejections": [],
+            "correction_attempts": [],
+            "command_failures": [],
+            "diagnostic_file_refs": [],
+            "validation_inference": [],
+            "attempted_commands": [],
+            "errors": [],
+            "touched_paths": [],
+        }
+
+    @staticmethod
+    def _trim_repository_memory(memory: Dict[str, Any]) -> Dict[str, Any]:
+        for key, limit in DevMasterGraph.MEMORY_LIMITS.items():
+            value = memory.get(key, [])
+            if not isinstance(value, list):
+                memory[key] = []
+                continue
+            if len(value) > int(limit):
+                memory[key] = value[-int(limit) :]
+        return memory
+
+    @staticmethod
+    def _ensure_repository_memory(state: DevGraphState) -> Dict[str, Any]:
+        current = state.get("repository_memory")
+        memory = dict(current) if isinstance(current, dict) else {}
+        for key, default_value in DevMasterGraph._default_repository_memory().items():
+            if key not in memory or not isinstance(memory.get(key), list):
+                memory[key] = list(default_value)
+        state["repository_memory"] = DevMasterGraph._trim_repository_memory(memory)
+        return state["repository_memory"]
+
+    @staticmethod
+    def _remember(state: DevGraphState, bucket: str, payload: Dict[str, Any]) -> None:
+        memory = DevMasterGraph._ensure_repository_memory(state)
+        entry = {
+            "timestamp_ms": int(time.time() * 1000),
+            "phase": str(state.get("current_step", "")),
+            "kind": bucket,
+            "data": payload,
+        }
+        memory.setdefault(bucket, []).append(entry)
+        state["repository_memory"] = DevMasterGraph._trim_repository_memory(memory)
+
+    @staticmethod
+    def _remember_text_value(state: DevGraphState, bucket: str, value: str) -> None:
+        memory = DevMasterGraph._ensure_repository_memory(state)
+        items = memory.setdefault(bucket, [])
+        if value and value not in items:
+            items.append(value)
+        state["repository_memory"] = DevMasterGraph._trim_repository_memory(memory)
+
+    @staticmethod
+    def _record_error_file_refs(state: DevGraphState, refs: List[str]) -> None:
+        for ref in refs:
+            normalized = str(ref or "").replace("\\", "/").strip()
+            if not normalized:
+                continue
+            DevMasterGraph._remember_text_value(state, "diagnostic_file_refs", normalized)
+
+    @staticmethod
+    def _has_recent_candidate_rejection(state: DevGraphState, candidate_path: str) -> bool:
+        normalized = str(candidate_path or "").replace("\\", "/").strip().casefold()
+        memory = DevMasterGraph._ensure_repository_memory(state)
+        rejections = memory.get("candidate_rejections", [])
+        if not isinstance(rejections, list):
+            return False
+        for entry in reversed(rejections):
+            data = entry.get("data", {}) if isinstance(entry, dict) else {}
+            candidate = str(data.get("candidate_path", "")).replace("\\", "/").strip().casefold()
+            if candidate and candidate == normalized:
+                return True
+        return False
 
     @staticmethod
     def _reindex_checklist(state: DevGraphState) -> None:
@@ -428,7 +535,7 @@ class DevMasterGraph:
         if "ruby" in stacks:
             return ["bundle exec rake test"]
         if "node" in stacks:
-            return ["npm run build"]
+            return ["npm run build", "npm test -- --watch=false"]
         return []
 
     @staticmethod
@@ -474,7 +581,7 @@ class DevMasterGraph:
         return compile_candidates
 
     @staticmethod
-    def _extract_validation_command(raw: str) -> str:
+    def _extract_validation_command(raw: str, *, stacks: Optional[List[str]] = None) -> str:
         val = (raw or "").strip()
         if not val:
             return ""
@@ -486,6 +593,49 @@ class DevMasterGraph:
             normalized = token.strip()
             if any(normalized.startswith(prefix) for prefix in DevMasterGraph.VALIDATION_COMMAND_PREFIXES):
                 return normalized
+        lowered = val.lower()
+        stack_hints = [str(x).lower() for x in (stacks or [])]
+        inferred_stack = "generic"
+        if any(s in stack_hints for s in ["node", "javascript", "typescript"]):
+            inferred_stack = "node"
+        elif "python" in stack_hints:
+            inferred_stack = "python"
+        elif "dotnet" in stack_hints:
+            inferred_stack = "dotnet"
+        elif "ruby" in stack_hints:
+            inferred_stack = "ruby"
+        if inferred_stack == "generic":
+            if any(tok in lowered for tok in ["npm", "pnpm", "yarn", "node", "typescript", "vite", "react", "angular"]):
+                inferred_stack = "node"
+            elif any(tok in lowered for tok in ["pytest", "python", "pip"]):
+                inferred_stack = "python"
+            elif any(tok in lowered for tok in ["dotnet", "c#"]):
+                inferred_stack = "dotnet"
+            elif any(tok in lowered for tok in ["rails", "ruby", "rake"]):
+                inferred_stack = "ruby"
+
+        wants_test = any(tok in lowered for tok in ["test", "spec", "assertion", "unit"])
+        wants_build = any(tok in lowered for tok in ["build", "compile", "compilation", "transpile", "bundle", "typecheck"])
+        wants_lint = "lint" in lowered
+
+        if inferred_stack == "node":
+            if wants_build:
+                return "npm run build"
+            if wants_test:
+                return "npm test -- --watch=false"
+            if wants_lint:
+                return "npm run lint"
+        if inferred_stack == "python":
+            if wants_test or wants_build:
+                return "python -m pytest"
+        if inferred_stack == "dotnet":
+            if wants_test:
+                return "dotnet test"
+            if wants_build:
+                return "dotnet build"
+        if inferred_stack == "ruby":
+            if wants_test or wants_build:
+                return "bundle exec rake test"
         return ""
 
     @staticmethod
@@ -651,7 +801,7 @@ class DevMasterGraph:
         def _add_candidate(path: str, score: int, reason: str) -> None:
             if not path:
                 return
-            cand_abs = os.path.abspath(path)
+            cand_abs = canonicalize_scope_path(scope_abs, path)
             if not DevMasterGraph._is_within_scope(scope_abs, cand_abs):
                 return
             if not os.path.isdir(cand_abs):
@@ -867,11 +1017,15 @@ class DevMasterGraph:
     @staticmethod
     def _refresh_active_root_index(state: DevGraphState, *, category: str) -> Dict[str, Any]:
         active_root = str(state.get("active_project_root", "")).strip()
+        scope_root = str(state.get("scope_root", "")).strip()
+        if active_root and scope_root:
+            active_root = canonicalize_scope_path(scope_root, active_root)
         if not active_root:
             project_root = str(state.get("project_root", "")).strip()
-            scope_root = str(state.get("scope_root", "")).strip()
             rel = project_root.split("/", 1)[1] if project_root.startswith("projects/") else project_root
             active_root = os.path.join(scope_root, rel) if scope_root else active_root
+        if active_root and scope_root:
+            active_root = canonicalize_scope_path(scope_root, active_root)
             state["active_project_root"] = active_root
         index = DevMasterGraph._build_active_root_file_index(active_root)
         state["active_root_file_index"] = index
@@ -1343,14 +1497,14 @@ class DevMasterGraph:
                 project_name = parts[1]
 
         if active_project_root:
-            active_abs = os.path.abspath(os.path.normpath(active_project_root))
+            active_abs = canonicalize_scope_path(scope_abs, active_project_root)
             if os.path.commonpath([scope_abs, active_abs]) == scope_abs:
                 base_root = active_abs
             else:
                 raise RuntimeError(f"Active project root escapes scope: {active_project_root}")
         else:
             rel = project_root_norm.split("/", 1)[1] if project_root_norm.startswith("projects/") else project_root_norm
-            base_root = os.path.abspath(os.path.join(scope_abs, rel))
+            base_root = canonicalize_scope_path(scope_abs, os.path.join(scope_abs, rel))
 
         file_name_norm = file_name_norm.replace("\\", "/").strip()
         while file_name_norm.startswith("./"):
@@ -1388,7 +1542,7 @@ class DevMasterGraph:
         if active_tail and rel_parts and rel_parts[0].casefold() == active_tail:
             rel_path = "/".join(rel_parts[1:])
 
-        safe_path = os.path.abspath(os.path.join(base_root, rel_path))
+        safe_path = canonicalize_scope_path(scope_abs, os.path.join(base_root, rel_path))
         if os.path.commonpath([scope_abs, safe_path]) != scope_abs:
             raise RuntimeError(f"Implementation target escapes scope: {expected_path_hint}")
         return safe_path
@@ -1436,6 +1590,32 @@ class DevMasterGraph:
             expected_suffix=expected_suffix,
             file_name=file_name,
         )
+        diagnostics_refs: List[str] = []
+        if state is not None:
+            memory = DevMasterGraph._ensure_repository_memory(state)
+            refs = memory.get("diagnostic_file_refs", [])
+            if isinstance(refs, list):
+                diagnostics_refs = [str(x).replace("\\", "/").strip().casefold() for x in refs if str(x).strip()]
+        if rel and state is not None and DevMasterGraph._has_recent_candidate_rejection(state, rel):
+            rel = ""
+        if not rel:
+            by_basename = index.get("by_basename_casefold", {}) if isinstance(index.get("by_basename_casefold"), dict) else {}
+            leaf = os.path.basename(str(file_name or "").replace("\\", "/")).strip().casefold()
+            alternatives = list(by_basename.get(leaf, [])) if leaf else []
+            if alternatives:
+                boosted = sorted(
+                    alternatives,
+                    key=lambda candidate: (
+                        1 if any(os.path.basename(candidate).casefold() in ref for ref in diagnostics_refs) else 0,
+                        1 if expected_suffix and str(candidate).casefold().endswith(expected_suffix.casefold()) else 0,
+                    ),
+                    reverse=True,
+                )
+                for candidate in boosted:
+                    if state is not None and DevMasterGraph._has_recent_candidate_rejection(state, candidate):
+                        continue
+                    rel = str(candidate)
+                    break
         if not rel:
             if state is not None:
                 key = expected_path_hint or file_name
@@ -1457,6 +1637,17 @@ class DevMasterGraph:
                 "confidence": confidence,
                 "candidates_considered": [rel],
             }
+            DevMasterGraph._remember(
+                state,
+                "candidate_attempts",
+                {
+                    "expected_path_hint": expected_path_hint,
+                    "file_name": file_name,
+                    "candidate_path": rel,
+                    "confidence": confidence,
+                    "resolution_method": evidence[key].get("resolution_method", ""),
+                },
+            )
         return os.path.join(active_root, rel)
 
     @staticmethod
@@ -1474,6 +1665,69 @@ class DevMasterGraph:
                     if candidate and candidate not in refs:
                         refs.append(candidate)
         return refs[:40]
+
+    @staticmethod
+    def _classify_diagnostic_taxonomy(attempt_history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        taxonomies: List[Dict[str, Any]] = []
+        for attempt in attempt_history:
+            blob = f"{attempt.get('stdout', '')}\n{attempt.get('stderr', '')}".lower()
+            kind = "runtime"
+            if any(tok in blob for tok in ["cannot find module", "module not found", "importerror", "no module named"]):
+                kind = "module"
+            elif any(tok in blob for tok in ["syntaxerror", "unexpected token", "parse error", "ts1005"]):
+                kind = "syntax"
+            elif any(tok in blob for tok in ["no such file", "cannot find the path", "enoent", "path"]):
+                kind = "path"
+            elif any(tok in blob for tok in ["test failed", "assert", "failing tests", "pytest"]):
+                kind = "test"
+            elif any(tok in blob for tok in ["config", "tsconfig", "package.json", "pyproject"]):
+                kind = "config"
+            taxonomies.append(
+                {
+                    "task_id": attempt.get("task_id", ""),
+                    "taxonomy": kind,
+                    "exit_code": attempt.get("exit_code"),
+                    "category": attempt.get("category", "unknown"),
+                }
+            )
+        return taxonomies
+
+    @staticmethod
+    def _infer_compile_recovery_commands(
+        *,
+        stacks: List[str],
+        taxonomy: List[Dict[str, Any]],
+        project_dir: str,
+    ) -> List[str]:
+        inferred: List[str] = []
+        primary = taxonomy[0]["taxonomy"] if taxonomy else "runtime"
+        if "node" in stacks:
+            if primary in {"module", "config", "path"}:
+                inferred.extend(["npm install", "npm run build"])
+            elif primary == "test":
+                inferred.append("npm test -- --watch=false")
+            else:
+                inferred.append("npm run build")
+        elif "python" in stacks:
+            if primary == "test":
+                inferred.append("python -m pytest")
+            else:
+                inferred.extend(["python -m pip install -r requirements.txt", "python -m pytest"])
+        elif "dotnet" in stacks:
+            inferred.extend(["dotnet restore", "dotnet build"])
+        elif "ruby" in stacks:
+            inferred.extend(["bundle install", "bundle exec rake test"])
+        if not inferred:
+            inferred = DevMasterGraph._infer_final_compile_commands(
+                project_dir=project_dir,
+                stacks=stacks,
+                validation_commands=[],
+            )
+        deduped: List[str] = []
+        for command in inferred:
+            if command not in deduped:
+                deduped.append(command)
+        return deduped[:2]
 
     @staticmethod
     def _comment_for_path(path: str, text: str) -> str:
@@ -1762,6 +2016,7 @@ class DevMasterGraph:
         state["current_step"] = "execute_implementation_phase"
         DevMasterGraph._emit(state, "[PHASE_START] execute_implementation_phase")
         DevMasterGraph._emit(state, "[PHASE] implementation")
+        DevMasterGraph._ensure_repository_memory(state)
 
         if state.get("bootstrap_status") == "failed":
             state["implementation_status"] = "impl_skipped"
@@ -1828,6 +2083,15 @@ class DevMasterGraph:
                     DevMasterGraph._refresh_active_root_index(
                         state,
                         category="post_file_mutation_index_refresh",
+                    )
+                    DevMasterGraph._remember(
+                        state,
+                        "correction_attempts",
+                        {
+                            "pass_index": pass_index,
+                            "target_index": idx,
+                            "action": action,
+                        },
                     )
                     pass_actions += 1
                     total_actions += 1
@@ -1898,6 +2162,14 @@ class DevMasterGraph:
                 raise RuntimeError("review gate failed: " + "; ".join(review_findings))
         except Exception as e:
             state["errors"].append(f"[IMPLEMENTATION_ERROR] {e}")
+            DevMasterGraph._remember(
+                state,
+                "candidate_rejections",
+                {
+                    "reason": str(e),
+                    "phase": "implementation",
+                },
+            )
             for idx, _target in pending_targets:
                 DevMasterGraph._set_checklist_status(
                     state,
@@ -1919,6 +2191,7 @@ class DevMasterGraph:
     def _execute_validation_phase_impl(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "execute_validation_phase"
         DevMasterGraph._emit(state, "[PHASE_START] execute_validation_phase")
+        DevMasterGraph._ensure_repository_memory(state)
         if state.get("bootstrap_status") == "failed" or state.get("implementation_status") == "failed":
             state["validation_status"] = "skipped"
             state["phase_status"]["execute_validation_phase"] = "skipped"
@@ -1944,6 +2217,16 @@ class DevMasterGraph:
                     )
             state["validation_status"] = "skipped"
             state["phase_status"]["execute_validation_phase"] = "skipped"
+            DevMasterGraph._remember(
+                state,
+                "validation_inference",
+                {
+                    "classification": "non_executable",
+                    "raw_requirements": raw_requirements,
+                    "unresolved_requirements": unresolved_requirements,
+                    "fallback_policy": "compile_gate_must_still_run",
+                },
+            )
             DevMasterGraph._emit_event(
                 state,
                 "validation_skipped_non_executable",
@@ -2010,8 +2293,23 @@ class DevMasterGraph:
         state["touched_paths"].extend(touched_paths)
         state["attempt_history"].extend(attempt_history)
         state["task_outcomes"].extend(outcomes)
+        for outcome in outcomes:
+            if str(outcome.get("status", "")) != "completed":
+                DevMasterGraph._remember(
+                    state,
+                    "command_failures",
+                    {
+                        "phase": "validation",
+                        "task_id": outcome.get("task_id"),
+                        "category": outcome.get("category", "unknown"),
+                        "exit_code": outcome.get("exit_code"),
+                        "stdout_excerpt": outcome.get("stdout_excerpt", ""),
+                        "stderr_excerpt": outcome.get("stderr_excerpt", ""),
+                    },
+                )
         error_file_refs = DevMasterGraph._extract_error_file_refs(attempt_history)
         if error_file_refs:
+            DevMasterGraph._record_error_file_refs(state, error_file_refs)
             DevMasterGraph._emit_event(
                 state,
                 "validation_error_file_refs",
@@ -2044,6 +2342,7 @@ class DevMasterGraph:
     def _execute_final_compile_gate_impl(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "execute_final_compile_gate"
         DevMasterGraph._emit(state, "[PHASE_START] execute_final_compile_gate")
+        DevMasterGraph._ensure_repository_memory(state)
         if (
             state.get("bootstrap_status") == "failed"
             or state.get("implementation_status") == "failed"
@@ -2069,11 +2368,35 @@ class DevMasterGraph:
             DevMasterGraph._emit(state, "[FINAL_COMPILE] all compile checklist items already completed")
             return state
         if not compile_tasks:
-            state["errors"].append("[FINAL_COMPILE] no terminating compile/build command inferred.")
-            state["final_compile_status"] = "failed"
-            state["status"] = "implementation_failed"
-            state["phase_status"]["execute_final_compile_gate"] = "failed"
-            return state
+            active_project_root = str(state.get("active_project_root", "")).strip()
+            stacks = [str(x) for x in state.get("detected_stacks", []) if isinstance(x, str)]
+            inferred_compile = DevMasterGraph._infer_final_compile_commands(
+                project_dir=active_project_root,
+                stacks=stacks,
+                validation_commands=[],
+            )
+            if inferred_compile:
+                compile_tasks = [
+                    DevTask(
+                        id=f"final_compile_fallback_{idx+1}",
+                        description=f"run fallback final compile gate: {cmd}",
+                        command=cmd,
+                        cwd=active_project_root or str(state.get("project_root", "")),
+                        kind="validation",
+                    )
+                    for idx, cmd in enumerate(inferred_compile)
+                ]
+                DevMasterGraph._emit_event(
+                    state,
+                    "final_compile_fallback_inferred",
+                    commands=inferred_compile,
+                )
+            else:
+                state["errors"].append("[FINAL_COMPILE] no terminating compile/build command inferred.")
+                state["final_compile_status"] = "failed"
+                state["status"] = "implementation_failed"
+                state["phase_status"]["execute_final_compile_gate"] = "failed"
+                return state
 
         active_root = str(state.get("active_project_root", "")).strip()
         if active_root:
@@ -2118,12 +2441,43 @@ class DevMasterGraph:
         state["touched_paths"].extend(touched_paths)
         state["attempt_history"].extend(attempt_history)
         state["task_outcomes"].extend(outcomes)
+        for outcome in outcomes:
+            if str(outcome.get("status", "")) != "completed":
+                DevMasterGraph._remember(
+                    state,
+                    "command_failures",
+                    {
+                        "phase": "final_compile",
+                        "task_id": outcome.get("task_id"),
+                        "category": outcome.get("category", "unknown"),
+                        "exit_code": outcome.get("exit_code"),
+                        "stdout_excerpt": outcome.get("stdout_excerpt", ""),
+                        "stderr_excerpt": outcome.get("stderr_excerpt", ""),
+                    },
+                )
         compile_error_file_refs = DevMasterGraph._extract_error_file_refs(attempt_history)
         if compile_error_file_refs:
+            DevMasterGraph._record_error_file_refs(state, compile_error_file_refs)
             DevMasterGraph._emit_event(
                 state,
                 "final_compile_error_file_refs",
                 refs=compile_error_file_refs,
+            )
+        taxonomy = DevMasterGraph._classify_diagnostic_taxonomy(attempt_history)
+        if taxonomy:
+            DevMasterGraph._remember(
+                state,
+                "correction_attempts",
+                {
+                    "phase": "final_compile",
+                    "taxonomy": taxonomy,
+                    "file_refs": compile_error_file_refs,
+                },
+            )
+            DevMasterGraph._emit_event(
+                state,
+                "final_compile_failure_taxonomy",
+                taxonomy=taxonomy,
             )
         for outcome in outcomes:
             checklist_id = f"todo_{outcome.get('task_id', '')}"
@@ -2132,6 +2486,56 @@ class DevMasterGraph:
         if pending:
             errors.append(f"[FINAL_COMPILE] pending llm recovery unsupported for final compile: {pending.get('task_id')}")
         if errors:
+            stacks = [str(x) for x in state.get("detected_stacks", []) if isinstance(x, str)]
+            active_project_root = str(state.get("active_project_root", "")).strip()
+            recovery_commands = DevMasterGraph._infer_compile_recovery_commands(
+                stacks=stacks,
+                taxonomy=taxonomy,
+                project_dir=active_project_root,
+            )
+            if recovery_commands:
+                recovery_tasks = [
+                    DevTask(
+                        id=f"final_compile_recovery_{idx+1}",
+                        description=f"targeted compile recovery: {cmd}",
+                        command=cmd,
+                        cwd=active_project_root or str(state.get("project_root", "")),
+                        kind="validation",
+                    )
+                    for idx, cmd in enumerate(recovery_commands)
+                ]
+                DevMasterGraph._emit_event(
+                    state,
+                    "final_compile_recovery_started",
+                    taxonomy=taxonomy,
+                    commands=recovery_commands,
+                )
+                rec_logs, rec_touched, rec_errors, rec_attempts, rec_pending, rec_outcomes = execute_dev_tasks(
+                    recovery_tasks,
+                    scope_root=state["scope_root"],
+                    max_retries=1,
+                    reserve_last_for_llm=False,
+                    log_sink=state.get("log_sink"),
+                    stack_hint=(state.get("detected_stacks") or ["generic"])[0],
+                    constraints=[
+                        str(x).strip()
+                        for x in state.get("plan", {}).get("constraints", [])
+                        if isinstance(x, str) and str(x).strip()
+                    ],
+                    command_run_mode="terminating",
+                    event_sink=(lambda event: DevMasterGraph._emit_event(state, "executor_event", **event)),
+                )
+                state["logs"].extend(rec_logs)
+                state["touched_paths"].extend(rec_touched)
+                state["attempt_history"].extend(rec_attempts)
+                state["task_outcomes"].extend(rec_outcomes)
+                if rec_pending:
+                    rec_errors.append(f"pending recovery unsupported: {rec_pending.get('task_id')}")
+                if not rec_errors:
+                    state["final_compile_status"] = "completed"
+                    state["phase_status"]["execute_final_compile_gate"] = "completed"
+                    DevMasterGraph._emit(state, "[FINAL_COMPILE] recovered")
+                    return state
             if compile_error_file_refs:
                 state["errors"].append(
                     "[RECOVERABLE_CONTEXT_GAP] final compile failed with file-level diagnostics; "
@@ -2173,6 +2577,18 @@ class DevMasterGraph:
     def _finalize_result_impl(state: DevGraphState) -> DevGraphState:
         state["current_step"] = "finalize_result"
         DevMasterGraph._emit(state, "[PHASE_START] finalize_result")
+        memory = DevMasterGraph._ensure_repository_memory(state)
+        for path in [str(x) for x in state.get("touched_paths", []) if isinstance(x, str)]:
+            DevMasterGraph._remember_text_value(state, "touched_paths", DevMasterGraph._relpath_safe(state, path))
+        for err in [str(x) for x in state.get("errors", []) if isinstance(x, str)]:
+            DevMasterGraph._remember_text_value(state, "errors", DevMasterGraph._sanitize_text(err, 320))
+        for outcome in state.get("task_outcomes", []):
+            if not isinstance(outcome, dict):
+                continue
+            cmd = str(outcome.get("command", "")).strip()
+            if cmd:
+                DevMasterGraph._remember_text_value(state, "attempted_commands", cmd)
+        memory = DevMasterGraph._ensure_repository_memory(state)
         if state.get("status") in {"bootstrap_failed", "implementation_failed"}:
             pass
         elif state.get("implementation_status") == "impl_skipped":
@@ -2201,6 +2617,57 @@ class DevMasterGraph:
             f"pass_status={state.get('implementation_pass_statuses', [])} "
             f"checklist={checklist_completed}/{checklist_total}"
         )
+        outcomes = [x for x in state.get("task_outcomes", []) if isinstance(x, dict)]
+        failed_outcomes = [x for x in outcomes if str(x.get("status", "")) != "completed"]
+        candidate_attempts = memory.get("candidate_attempts", []) if isinstance(memory.get("candidate_attempts"), list) else []
+        candidate_rejections = memory.get("candidate_rejections", []) if isinstance(memory.get("candidate_rejections"), list) else []
+        validation_inference = memory.get("validation_inference", []) if isinstance(memory.get("validation_inference"), list) else []
+        rejected_paths = {
+            str(item.get("data", {}).get("candidate_path", "")).replace("\\", "/").strip().casefold()
+            for item in candidate_rejections
+            if isinstance(item, dict) and isinstance(item.get("data"), dict)
+        }
+        repeated_retry_count = 0
+        total_attempt_count = 0
+        for item in candidate_attempts:
+            if not isinstance(item, dict) or not isinstance(item.get("data"), dict):
+                continue
+            total_attempt_count += 1
+            path = str(item.get("data", {}).get("candidate_path", "")).replace("\\", "/").strip().casefold()
+            if path and path in rejected_paths:
+                repeated_retry_count += 1
+        reliability_metrics = {
+            "target_selection_precision": (
+                max(0.0, 1.0 - (len(candidate_rejections) / max(1, len(candidate_attempts))))
+                if candidate_attempts
+                else 1.0
+            ),
+            "repeated_failed_candidate_retry_rate": repeated_retry_count / max(1, total_attempt_count),
+            "validation_executability_rate": (
+                1.0
+                if not validation_inference
+                else (
+                    sum(
+                        1
+                        for item in validation_inference
+                        if isinstance(item, dict)
+                        and isinstance(item.get("data"), dict)
+                        and item.get("data", {}).get("classification") != "non_executable"
+                    )
+                    / max(1, len(validation_inference))
+                )
+            ),
+            "compile_gate_execution_rate": 1.0 if state.get("final_compile_status") in {"completed", "failed"} else 0.0,
+            "autonomous_recovery_success_rate": (
+                1.0
+                if any(str(x).startswith("final_compile_recovery_") for x in [o.get("task_id", "") for o in outcomes])
+                and state.get("final_compile_status") == "completed"
+                else 0.0
+            ),
+            "implementation_failed": 1.0 if state.get("status") == "implementation_failed" else 0.0,
+            "task_failure_rate": len(failed_outcomes) / max(1, len(outcomes)),
+        }
+        state["reliability_metrics"] = reliability_metrics
         DevMasterGraph._emit_event(
             state,
             "final_summary",
@@ -2211,6 +2678,7 @@ class DevMasterGraph:
             phase_status=state.get("phase_status", {}),
             implementation_passes=state.get("implementation_pass_statuses", []),
             task_outcomes=len(state.get("task_outcomes", [])),
+            reliability_metrics=reliability_metrics,
         )
         DevMasterGraph._emit(state, f"[FINAL] {state['final_summary']}")
         state["phase_status"]["finalize_result"] = "completed"

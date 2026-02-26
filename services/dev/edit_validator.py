@@ -54,6 +54,86 @@ def validate_pre_apply(
     return {"passed": not errors, "checks": checks, "warnings": warnings, "errors": errors}
 
 
+def classify_target_class(path: str) -> str:
+    normalized = str(path or "").replace("\\", "/").lower()
+    leaf = os.path.basename(normalized)
+    if leaf.startswith(".") or leaf in {"package.json", "pyproject.toml", "requirements.txt", "cargo.toml", "go.mod"}:
+        return "config"
+    if any(token in leaf for token in ["main.", "index.", "program.cs", "app.py"]):
+        return "entrypoint"
+    if ".spec." in leaf or ".test." in leaf:
+        return "test"
+    if any(token in leaf for token in [".html", ".htm", ".xml", ".tmpl", ".template"]):
+        return "template"
+    if any(token in leaf for token in [".css", ".scss", ".sass", ".less", ".styl"]):
+        return "style"
+    if "module" in leaf:
+        return "module"
+    if "component" in leaf:
+        return "component"
+    return "source"
+
+
+def infer_expected_target_class(expected_path_hint: str, file_name: str, details: str) -> str:
+    joined = " ".join([str(expected_path_hint or ""), str(file_name or ""), str(details or "")]).lower()
+    if any(token in joined for token in ["component", ".component", "ui view", "render"]):
+        return "component"
+    if any(token in joined for token in ["module", "ngmodule", "app.module"]):
+        return "module"
+    if any(token in joined for token in ["template", "html", ".component.html"]):
+        return "template"
+    if any(token in joined for token in ["style", "css", "scss"]):
+        return "style"
+    if any(token in joined for token in ["entrypoint", "bootstrap", "main.ts", "main.js", "index.ts", "index.js"]):
+        return "entrypoint"
+    if any(token in joined for token in ["test", "spec", "assert"]):
+        return "test"
+    if any(token in joined for token in ["config", "settings", "package.json", "tsconfig", "pyproject"]):
+        return "config"
+    return classify_target_class(file_name or expected_path_hint)
+
+
+def validate_intent_alignment(
+    *,
+    expected_path_hint: str,
+    file_name: str,
+    details: str,
+    selected_path: str,
+) -> Dict[str, Any]:
+    checks: List[str] = ["intent_target_class_checked"]
+    warnings: List[str] = []
+    errors: List[str] = []
+    expected_class = infer_expected_target_class(expected_path_hint, file_name, details)
+    selected_class = classify_target_class(selected_path)
+    confidence = 0.55
+    hard_mismatch_pairs = {
+        ("component", "entrypoint"),
+        ("module", "entrypoint"),
+        ("template", "entrypoint"),
+        ("entrypoint", "component"),
+        ("entrypoint", "module"),
+        ("entrypoint", "template"),
+        ("config", "entrypoint"),
+    }
+    if expected_class == selected_class:
+        confidence = 0.95
+    elif (expected_class, selected_class) in hard_mismatch_pairs:
+        confidence = 0.95
+        errors.append("intent_target_class_mismatch")
+    else:
+        confidence = 0.7
+        warnings.append("intent_target_class_uncertain")
+    return {
+        "passed": not errors,
+        "checks": checks,
+        "warnings": warnings,
+        "errors": errors,
+        "confidence": confidence,
+        "expected_target_class": expected_class,
+        "selected_target_class": selected_class,
+    }
+
+
 def validate_post_apply(
     *,
     path: str,

@@ -5,6 +5,28 @@ from typing import Any, Dict, List, TypedDict
 from shared.dev_schemas import DevTask
 
 
+class DevMemoryEntry(TypedDict, total=False):
+    timestamp_ms: int
+    phase: str
+    kind: str
+    data: Dict[str, Any]
+
+
+class DevRepositoryMemory(TypedDict, total=False):
+    files_inspected: List[DevMemoryEntry]
+    symbols_discovered: List[DevMemoryEntry]
+    assumptions: List[DevMemoryEntry]
+    candidate_attempts: List[DevMemoryEntry]
+    candidate_rejections: List[DevMemoryEntry]
+    correction_attempts: List[DevMemoryEntry]
+    command_failures: List[DevMemoryEntry]
+    diagnostic_file_refs: List[str]
+    validation_inference: List[DevMemoryEntry]
+    attempted_commands: List[str]
+    errors: List[str]
+    touched_paths: List[str]
+
+
 class DevGraphState(TypedDict, total=False):
     request_id: str
     plan: Dict[str, Any]
@@ -52,7 +74,8 @@ class DevGraphState(TypedDict, total=False):
     dev_discovery_candidates: List[Dict[str, Any]]
     dev_technical_plan: Dict[str, Any]
     dev_plan_approved: bool
-    repository_memory: Dict[str, Any]
+    repository_memory: DevRepositoryMemory
     target_resolution_evidence: Dict[str, Any]
     capability_gaps: List[Dict[str, Any]]
+    reliability_metrics: Dict[str, Any]
 
