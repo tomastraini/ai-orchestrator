@@ -1,0 +1,7 @@
+{
+  "target_resolution_success_rate": 1.0,
+  "checklist_completion_rate": 0.8333333333333334,
+  "unresolved_target_errors": 0,
+  "retry_count": 2,
+  "task_outcome_count": 3
+}
