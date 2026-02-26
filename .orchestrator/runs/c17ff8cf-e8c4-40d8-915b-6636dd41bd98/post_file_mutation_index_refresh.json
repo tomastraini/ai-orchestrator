@@ -1,0 +1,469 @@
+{
+  "generated_at": "2026-02-26T15:18:18.891657+00:00",
+  "phase": "post_file_mutation_index_refresh",
+  "cognition": {
+    "version": "2.0",
+    "generated_at": "2026-02-26T15:18:18.891189+00:00",
+    "project_root": "home/vboxuser/Documents/repositories/ai-orchestrator/projects/world-time-app",
+    "workspace_hash": "ab351d14d2ec901eb1c9321c2f3315416311fc05",
+    "provider_capabilities": {
+      "tree_sitter": false,
+      "tree_sitter_languages": false,
+      "libcst": false,
+      "networkx": false,
+      "yaml": true,
+      "orjson": true
+    },
+    "active_root": "home/vboxuser/Documents/repositories/ai-orchestrator/projects/world-time-app",
+    "file_count": 12,
+    "files": [
+      {
+        "path": "index.html",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.1,
+        "confidence": 0.9
+      },
+      {
+        "path": "tsconfig.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "package-lock.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": ".gitignore",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "package.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "public/vite.svg",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "src/counter.ts",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [
+          {
+            "name": "setCounter",
+            "kind": "value",
+            "line": 3,
+            "end_line": 3
+          },
+          {
+            "name": "setupCounter",
+            "kind": "function",
+            "line": 1,
+            "end_line": 1
+          }
+        ],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/style.css",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "src/typescript.svg",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "src/main.ts",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [
+          {
+            "name": "data",
+            "kind": "value",
+            "line": 22,
+            "end_line": 22
+          }
+        ],
+        "imports": [
+          {
+            "module": "react",
+            "members": [],
+            "is_external": true
+          },
+          {
+            "module": "src/App.css",
+            "members": [],
+            "is_external": false
+          }
+        ],
+        "exports": [],
+        "relationships": [
+          {
+            "type": "imports",
+            "target": "react"
+          },
+          {
+            "type": "imports",
+            "target": "src/App.css"
+          }
+        ],
+        "entrypoint_score": 0.8,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/components/CityClock.tsx",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [
+          {
+            "name": "startTimer",
+            "kind": "value",
+            "line": 17,
+            "end_line": 17
+          }
+        ],
+        "imports": [
+          {
+            "module": "react",
+            "members": [],
+            "is_external": true
+          }
+        ],
+        "exports": [],
+        "relationships": [
+          {
+            "type": "imports",
+            "target": "react"
+          }
+        ],
+        "entrypoint_score": 0.0,
+        "confidence": 0.9
+      },
+      {
+        "path": "src/services/timeService.ts",
+        "kind": "source",
+        "language": "typescript",
+        "symbols": [
+          {
+            "name": "TimeServiceError",
+            "kind": "class",
+            "line": 29,
+            "end_line": 29
+          },
+          {
+            "name": "data",
+            "kind": "value",
+            "line": 56,
+            "end_line": 56
+          },
+          {
+            "name": "fetchCurrentTime",
+            "kind": "function",
+            "line": 41,
+            "end_line": 41
+          }
+        ],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.9
+      }
+    ],
+    "symbol_index": {
+      "files": [
+        {
+          "path": "src/counter.ts",
+          "language": "javascript",
+          "symbols": [
+            {
+              "name": "setCounter",
+              "kind": "value",
+              "line": 3,
+              "end_line": 3
+            },
+            {
+              "name": "setupCounter",
+              "kind": "function",
+              "line": 1,
+              "end_line": 1
+            }
+          ]
+        },
+        {
+          "path": "src/main.ts",
+          "language": "javascript",
+          "symbols": [
+            {
+              "name": "data",
+              "kind": "value",
+              "line": 22,
+              "end_line": 22
+            }
+          ]
+        },
+        {
+          "path": "src/components/CityClock.tsx",
+          "language": "javascript",
+          "symbols": [
+            {
+              "name": "startTimer",
+              "kind": "value",
+              "line": 17,
+              "end_line": 17
+            }
+          ]
+        },
+        {
+          "path": "src/services/timeService.ts",
+          "language": "javascript",
+          "symbols": [
+            {
+              "name": "TimeServiceError",
+              "kind": "class",
+              "line": 29,
+              "end_line": 29
+            },
+            {
+              "name": "data",
+              "kind": "value",
+              "line": 56,
+              "end_line": 56
+            },
+            {
+              "name": "fetchCurrentTime",
+              "kind": "function",
+              "line": 41,
+              "end_line": 41
+            }
+          ]
+        }
+      ],
+      "by_name": {
+        "setCounter": [
+          "src/counter.ts"
+        ],
+        "setupCounter": [
+          "src/counter.ts"
+        ],
+        "data": [
+          "src/main.ts",
+          "src/services/timeService.ts"
+        ],
+        "startTimer": [
+          "src/components/CityClock.tsx"
+        ],
+        "TimeServiceError": [
+          "src/services/timeService.ts"
+        ],
+        "fetchCurrentTime": [
+          "src/services/timeService.ts"
+        ]
+      }
+    },
+    "graph": {
+      "nodes": [
+        "index.html",
+        "tsconfig.json",
+        "package-lock.json",
+        ".gitignore",
+        "package.json",
+        "public/vite.svg",
+        "src/counter.ts",
+        "src/style.css",
+        "src/typescript.svg",
+        "src/main.ts",
+        "src/components/CityClock.tsx",
+        "src/services/timeService.ts"
+      ],
+      "edges": []
+    },
+    "dependency_graph": {
+      "dependencies": [
+        {
+          "name": "typescript",
+          "version": "~5.9.3",
+          "source": "npm",
+          "scope": "devDependencies"
+        },
+        {
+          "name": "vite",
+          "version": "^7.3.1",
+          "source": "npm",
+          "scope": "devDependencies"
+        }
+      ]
+    },
+    "entrypoints": [
+      {
+        "path": "src/main.ts",
+        "score": 0.8,
+        "reasons": [
+          "known_entry_basename",
+          "entrypoint_like_name"
+        ]
+      },
+      {
+        "path": "index.html",
+        "score": 0.1,
+        "reasons": [
+          "entrypoint_like_name"
+        ]
+      }
+    ],
+    "entrypoint_aliases": {
+      "": [
+        "index.html"
+      ],
+      "src": [
+        "src/main.ts"
+      ]
+    },
+    "tests": [],
+    "test_mappings": [],
+    "configs": [
+      "package.json",
+      "tsconfig.json"
+    ],
+    "toolchain": [
+      {
+        "name": "node",
+        "confidence": 0.9
+      }
+    ],
+    "path_aliases": {},
+    "architecture_signals": [
+      {
+        "name": "unknown",
+        "confidence": 0.4
+      }
+    ],
+    "resolution_hints": {
+      "by_basename": {
+        "index.html": [
+          "index.html"
+        ],
+        "tsconfig.json": [
+          "tsconfig.json"
+        ],
+        "package-lock.json": [
+          "package-lock.json"
+        ],
+        ".gitignore": [
+          ".gitignore"
+        ],
+        "package.json": [
+          "package.json"
+        ],
+        "vite.svg": [
+          "public/vite.svg"
+        ],
+        "counter.ts": [
+          "src/counter.ts"
+        ],
+        "style.css": [
+          "src/style.css"
+        ],
+        "typescript.svg": [
+          "src/typescript.svg"
+        ],
+        "main.ts": [
+          "src/main.ts"
+        ],
+        "cityclock.tsx": [
+          "src/components/CityClock.tsx"
+        ],
+        "timeservice.ts": [
+          "src/services/timeService.ts"
+        ]
+      },
+      "entrypoint_candidates": [
+        {
+          "path": "src/main.ts",
+          "score": 0.8
+        },
+        {
+          "path": "index.html",
+          "score": 0.1
+        }
+      ],
+      "entrypoint_aliases": {
+        "": [
+          "index.html"
+        ],
+        "src": [
+          "src/main.ts"
+        ]
+      },
+      "ai_ranked_candidates": [
+        {
+          "path": "src/main.ts",
+          "score": 0.8,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "index.html",
+          "score": 0.1,
+          "reason": "ai_fallback_ranked"
+        }
+      ]
+    }
+  }
+}
