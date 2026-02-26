@@ -198,7 +198,7 @@ def run(
     *,
     mode: str = "full",
     from_latest: bool = False,
-    continuation_mode: str = "on",
+    continuation_mode: str = "off",
     session_id: str = "",
     continue_from_request_id: str = "",
     delta_requirement: str = "",

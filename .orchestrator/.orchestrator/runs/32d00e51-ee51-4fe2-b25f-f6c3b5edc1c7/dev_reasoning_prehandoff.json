@@ -1,0 +1,291 @@
+{
+  "request_id": "32d00e51-ee51-4fe2-b25f-f6c3b5edc1c7",
+  "project_root": "projects/city-weather-app",
+  "active_project_root": "/home/vboxuser/Documents/repositories/ai-orchestrator/projects/city-weather-app",
+  "technical_plan": {
+    "project_root": "projects/city-weather-app",
+    "affected_files": [
+      {
+        "path_hint": "projects/city-weather-app/src/index.html",
+        "file_name": "index.html",
+        "change_type": "create",
+        "creation_policy": "create_if_missing",
+        "rationale": "HTML entrypoint that bootstraps the Angular application root selector"
+      },
+      {
+        "path_hint": "projects/city-weather-app/src/main.ts",
+        "file_name": "main.ts",
+        "change_type": "create",
+        "creation_policy": "create_if_missing",
+        "rationale": "Angular bootstrap file that invokes platformBrowserDynamic().bootstrapModule(AppModule)"
+      },
+      {
+        "path_hint": "projects/city-weather-app/src/app/app.module.ts",
+        "file_name": "app.module.ts",
+        "change_type": "create",
+        "creation_policy": "create_if_missing",
+        "rationale": "Root Angular module that declares AppComponent and provides WeatherService"
+      },
+      {
+        "path_hint": "projects/city-weather-app/src/app/app.component.ts",
+        "file_name": "app.component.ts",
+        "change_type": "create",
+        "creation_policy": "create_if_missing",
+        "rationale": "Root component that injects WeatherService and binds weather data to the template"
+      },
+      {
+        "path_hint": "projects/city-weather-app/src/app/app.component.html",
+        "file_name": "app.component.html",
+        "change_type": "create",
+        "creation_policy": "create_if_missing",
+        "rationale": "Template to display weather data consumed from WeatherService"
+      },
+      {
+        "path_hint": "projects/city-weather-app/package.json",
+        "file_name": "package.json",
+        "change_type": "update",
+        "creation_policy": "must_exist",
+        "rationale": "Add npm scripts for \"start\", \"build\", and \"test\" to serve, compile, and test the Angular application"
+      }
+    ],
+    "command_plan": [],
+    "todo_plan": [
+      {
+        "id": "dev_todo_1",
+        "description": "create projects/city-weather-app/src/index.html",
+        "acceptance_criteria": [
+          "File change is applied and syntactically valid",
+          "Change aligns with PM acceptance criteria and constraints"
+        ]
+      },
+      {
+        "id": "dev_todo_2",
+        "description": "create projects/city-weather-app/src/main.ts",
+        "acceptance_criteria": [
+          "File change is applied and syntactically valid",
+          "Change aligns with PM acceptance criteria and constraints"
+        ]
+      },
+      {
+        "id": "dev_todo_3",
+        "description": "create projects/city-weather-app/src/app/app.module.ts",
+        "acceptance_criteria": [
+          "File change is applied and syntactically valid",
+          "Change aligns with PM acceptance criteria and constraints"
+        ]
+      },
+      {
+        "id": "dev_todo_4",
+        "description": "create projects/city-weather-app/src/app/app.component.ts",
+        "acceptance_criteria": [
+          "File change is applied and syntactically valid",
+          "Change aligns with PM acceptance criteria and constraints"
+        ]
+      },
+      {
+        "id": "dev_todo_5",
+        "description": "create projects/city-weather-app/src/app/app.component.html",
+        "acceptance_criteria": [
+          "File change is applied and syntactically valid",
+          "Change aligns with PM acceptance criteria and constraints"
+        ]
+      },
+      {
+        "id": "dev_todo_6",
+        "description": "update projects/city-weather-app/package.json",
+        "acceptance_criteria": [
+          "File change is applied and syntactically valid",
+          "Change aligns with PM acceptance criteria and constraints"
+        ]
+      }
+    ],
+    "validation_plan": [
+      {
+        "id": "validation_cmd_1",
+        "description": "run validation command: npm run build",
+        "command": "npm run build"
+      }
+    ],
+    "discovery_candidates": [
+      {
+        "path": "projects/city-weather-app/angular.json",
+        "score": 80,
+        "hits": [
+          "angular",
+          "app",
+          "city",
+          "json",
+          "project",
+          "the",
+          "weather"
+        ]
+      },
+      {
+        "path": "projects/city-weather-app/package.json",
+        "score": 66,
+        "hits": [
+          "app",
+          "city",
+          "json",
+          "package",
+          "project",
+          "the",
+          "weather"
+        ]
+      },
+      {
+        "path": "projects/city-weather-app/tsconfig.json",
+        "score": 60,
+        "hits": [
+          "app",
+          "city",
+          "json",
+          "project",
+          "the",
+          "weather"
+        ]
+      },
+      {
+        "path": "projects/city-weather-app/README.md",
+        "score": 56,
+        "hits": [
+          "app",
+          "city",
+          "project",
+          "the",
+          "weather"
+        ]
+      },
+      {
+        "path": "projects/city-weather-app/src/app/weather.service.ts",
+        "score": 55,
+        "hits": [
+          "app",
+          "city",
+          "project",
+          "the",
+          "weather"
+        ]
+      },
+      {
+        "path": "documentation/milestones/milestone-c-angular-runtime-recovery.md",
+        "score": 35,
+        "hits": [
+          "angular",
+          "run"
+        ]
+      },
+      {
+        "path": "ARCHITECTURE_AND_CODING_GUIDELINES.md",
+        "score": 30,
+        "hits": [
+          "and",
+          "architecture_and_coding_guidelines"
+        ]
+      },
+      {
+        "path": "shared/handoff_ports.py",
+        "score": 25,
+        "hits": [
+          "and"
+        ]
+      },
+      {
+        "path": "services/dev/command_policy.py",
+        "score": 25,
+        "hits": [
+          "and"
+        ]
+      },
+      {
+        "path": "services/dev/handoffpack_reader.py",
+        "score": 25,
+        "hits": [
+          "and"
+        ]
+      },
+      {
+        "path": "services/dev/utils/command_rewrite_utils.py",
+        "score": 25,
+        "hits": [
+          "and"
+        ]
+      },
+      {
+        "path": "services/pm/handoffpack_writer.py",
+        "score": 25,
+        "hits": [
+          "and"
+        ]
+      },
+      {
+        "path": "services/pm/dev_handoff_store.py",
+        "score": 25,
+        "hits": [
+          "and"
+        ]
+      },
+      {
+        "path": "tests/test_command_policy.py",
+        "score": 25,
+        "hits": [
+          "and"
+        ]
+      },
+      {
+        "path": "tests/test_pm_mandatory_questions.py",
+        "score": 25,
+        "hits": [
+          "and"
+        ]
+      },
+      {
+        "path": "tests/test_handoffpack_roundtrip.py",
+        "score": 25,
+        "hits": [
+          "and"
+        ]
+      },
+      {
+        "path": "tests/test_pm_handoff_store.py",
+        "score": 25,
+        "hits": [
+          "and"
+        ]
+      },
+      {
+        "path": "tests/test_handoff_continuation_contract.py",
+        "score": 25,
+        "hits": [
+          "and"
+        ]
+      },
+      {
+        "path": "tests/test_continuation_memory_and_checklist_bounds.py",
+        "score": 25,
+        "hits": [
+          "and"
+        ]
+      },
+      {
+        "path": "scripts/run_parity_suite.py",
+        "score": 20,
+        "hits": [
+          "run",
+          "scripts"
+        ]
+      }
+    ]
+  },
+  "constraints": [
+    "Follow Angular CLI project conventions",
+    "Adhere to existing ARCHITECTURE_AND_CODING_GUIDELINES.md",
+    "Do not include executable commands in the PM plan",
+    "Maintain framework-agnostic justification but use Angular as specified"
+  ],
+  "validation": [
+    "Run npm install and npm run build to verify compilation succeeds without errors",
+    "Run npm start (or ng serve) to verify the application runs and serves index.html",
+    "Open served page and confirm AppComponent displays weather data from WeatherService"
+  ]
+}

@@ -1,9 +1,0 @@
-{
-  "session_id": "",
-  "request_id": "2fb77b9d-a28f-4228-8075-06f54c9132f3",
-  "iteration_index": 0,
-  "status": "partial_progress",
-  "continuation_eligible": true,
-  "ready_for_followup": true,
-  "continuation_reason": "partial_progress_continue_recommended"
-}

@@ -1,0 +1,37 @@
+{
+  "session_id": "",
+  "request_id": "32d00e51-ee51-4fe2-b25f-f6c3b5edc1c7",
+  "iteration_index": 0,
+  "status": "recoverable_blocked",
+  "continuation_eligible": true,
+  "ready_for_followup": true,
+  "continuation_reason": "recoverable_blocker_continue_recommended",
+  "continuation_guidance": {
+    "status": "recoverable_blocked",
+    "continuation_reason": "recoverable_blocker_continue_recommended",
+    "needs_validation_clarification": false,
+    "followup_options": [
+      {
+        "id": "manual_ui_walkthrough",
+        "label": "Manual UI walkthrough",
+        "description": "Run the app and verify behaviors manually with observed evidence."
+      },
+      {
+        "id": "browser_automation_adapter",
+        "label": "Browser automation (if adapter available)",
+        "description": "Use a browser capability adapter to run click/type/observe checks."
+      },
+      {
+        "id": "targeted_runtime_checks",
+        "label": "Targeted runtime checks",
+        "description": "Run narrow executable checks that validate key acceptance criteria."
+      },
+      {
+        "id": "poke_tests",
+        "label": "Runtime poke tests",
+        "description": "Probe likely failure modes with lightweight interactive checks."
+      }
+    ],
+    "recommended_next_step": "Provide the next improvement requirement."
+  }
+}
