@@ -5,6 +5,13 @@ from typing import Any, Dict, List, TypedDict
 from shared.dev_schemas import DevTask
 
 
+class ValidationEvidence(TypedDict, total=False):
+    strategy: str
+    notes: str
+    steps: List[str]
+    observations: List[str]
+
+
 class DevMemoryEntry(TypedDict, total=False):
     timestamp_ms: int
     phase: str
@@ -92,4 +99,9 @@ class DevGraphState(TypedDict, total=False):
     ready_for_followup: bool
     continuation_mode: str
     trigger_type: str
+    continuation_guidance: Dict[str, Any]
+    needs_validation_clarification: bool
+    validation_followup_options: List[Dict[str, str]]
+    browser_validation_adapter: Any
+    validation_evidence: List[ValidationEvidence]
 

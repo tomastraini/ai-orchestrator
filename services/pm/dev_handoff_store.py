@@ -196,6 +196,7 @@ def build_dev_handoff(
             "carry_forward_memory": True,
             "trigger_type": "initial",
             "continuation_mode": "off",
+            "continuation_guidance": {},
         },
         "dev_preflight_plan": {
             "status": "pending",

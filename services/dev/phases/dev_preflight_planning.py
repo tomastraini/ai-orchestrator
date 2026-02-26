@@ -5,6 +5,7 @@ import platform
 from typing import List
 
 from services.dev.types.dev_graph_state import DevGraphState
+from services.dev.validation_strategy import infer_validation_strategy
 from shared.dev_schemas import DevTask
 
 
@@ -74,6 +75,12 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
         stacks=detected,
         validation_commands=validation_commands,
     )
+    validation_strategy = infer_validation_strategy(
+        raw_validation_requirements=raw_validation_requirements,
+        validation_commands=validation_commands,
+        unresolved_validation_requirements=unresolved_validation_requirements,
+        browser_adapter_available=bool(state.get("browser_validation_adapter")),
+    )
 
     state["dev_preflight_plan"] = {
         "os": platform.system(),
@@ -83,6 +90,7 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
         "final_compile_commands": final_compile_commands,
         "raw_validation_requirements": raw_validation_requirements,
         "unresolved_validation_requirements": unresolved_validation_requirements,
+        "validation_strategy": validation_strategy,
     }
     state["validation_tasks"] = [
         DevTask(
@@ -131,6 +139,7 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
         validation_commands=validation_commands,
         unresolved_validation_requirements=unresolved_validation_requirements,
         final_compile_commands=final_compile_commands,
+        validation_strategy=validation_strategy,
     )
     state["phase_status"]["dev_preflight_planning"] = "completed"
     graph_cls._remember(

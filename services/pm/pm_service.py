@@ -565,6 +565,11 @@ def create_plan(
                 "carry_forward_memory": bool(continuation.get("carry_forward_memory", True)),
                 "trigger_type": str(continuation.get("trigger_type", "improvement")).strip() or "improvement",
                 "continuation_mode": str(continuation.get("continuation_mode", "off")).strip() or "off",
+                "continuation_guidance": (
+                    dict(continuation.get("continuation_guidance", {}))
+                    if isinstance(continuation.get("continuation_guidance"), dict)
+                    else {}
+                ),
             }
         context_store.save_dev_handoff(request_id=request_id, handoff=handoff)
         if handoff_writer is not None:

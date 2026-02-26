@@ -27,6 +27,11 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
     state["carry_forward_memory"] = bool(continuation.get("carry_forward_memory", True))
     state["trigger_type"] = str(continuation.get("trigger_type", "initial")).strip() or "initial"
     state["continuation_mode"] = str(continuation.get("continuation_mode", "off")).strip() or "off"
+    state["continuation_guidance"] = (
+        dict(continuation.get("continuation_guidance", {}))
+        if isinstance(continuation.get("continuation_guidance"), dict)
+        else {}
+    )
     project_root = handoff.get("project_root")
     if isinstance(project_root, str) and "/" in project_root:
         normalized_root = project_root.replace("\\", "/").strip().lstrip("./")

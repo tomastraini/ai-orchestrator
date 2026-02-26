@@ -26,6 +26,7 @@ class HandoffContinuationContractTests(unittest.TestCase):
         self.assertIsInstance(continuation, dict)
         self.assertEqual(continuation.get("trigger_type"), "initial")
         self.assertEqual(continuation.get("continuation_mode"), "off")
+        self.assertEqual(continuation.get("continuation_guidance"), {})
 
     def test_ingest_rehydrates_continuation_fields(self) -> None:
         state = {
@@ -45,6 +46,7 @@ class HandoffContinuationContractTests(unittest.TestCase):
                     "carry_forward_memory": True,
                     "trigger_type": "improvement",
                     "continuation_mode": "prompt",
+                    "continuation_guidance": {"needs_validation_clarification": True},
                 },
             },
         }
@@ -63,6 +65,7 @@ class HandoffContinuationContractTests(unittest.TestCase):
         self.assertEqual(out.get("iteration_index"), 2)
         self.assertEqual(out.get("continuation_mode"), "prompt")
         self.assertEqual(out.get("delta_requirement"), "add tests")
+        self.assertEqual(out.get("continuation_guidance"), {"needs_validation_clarification": True})
 
 
 if __name__ == "__main__":

@@ -104,6 +104,11 @@ class DevService:
                 "continuation_mode": str(final_state.get("continuation_mode", "off")).strip() or "off",
                 "continuation_eligible": bool(final_state.get("continuation_eligible", False)),
                 "ready_for_followup": bool(final_state.get("ready_for_followup", False)),
+                "continuation_guidance": (
+                    dict(final_state.get("continuation_guidance", {}))
+                    if isinstance(final_state.get("continuation_guidance"), dict)
+                    else {}
+                ),
             }
             pending_ids: list[str] = []
             if isinstance(internal_checklist, list):
@@ -150,6 +155,11 @@ class DevService:
             "continuation_eligible": bool(final_state.get("continuation_eligible", False)),
             "ready_for_followup": bool(final_state.get("ready_for_followup", False)),
             "continuation_reason": str(final_state.get("continuation_reason", "")).strip(),
+            "continuation_guidance": (
+                dict(final_state.get("continuation_guidance", {}))
+                if isinstance(final_state.get("continuation_guidance"), dict)
+                else {}
+            ),
             "final_summary": str(final_state.get("final_summary", "")).strip(),
             "session_id": str(final_state.get("session_id", "")).strip(),
         }
@@ -181,6 +191,11 @@ class DevService:
             "continuation_eligible": bool(final_state.get("continuation_eligible", False)),
             "ready_for_followup": bool(final_state.get("ready_for_followup", False)),
             "continuation_reason": str(final_state.get("continuation_reason", "")).strip(),
+            "continuation_guidance": (
+                dict(final_state.get("continuation_guidance", {}))
+                if isinstance(final_state.get("continuation_guidance"), dict)
+                else {}
+            ),
         }
         metrics = {
             "target_resolution_success_rate": _compute_target_resolution_success_rate(final_state),
@@ -218,6 +233,11 @@ class DevService:
                         "continuation_eligible": bool(final_state.get("continuation_eligible", False)),
                         "ready_for_followup": bool(final_state.get("ready_for_followup", False)),
                         "continuation_reason": str(final_state.get("continuation_reason", "")).strip(),
+                        "continuation_guidance": (
+                            dict(final_state.get("continuation_guidance", {}))
+                            if isinstance(final_state.get("continuation_guidance"), dict)
+                            else {}
+                        ),
                     },
                     fh,
                     indent=2,

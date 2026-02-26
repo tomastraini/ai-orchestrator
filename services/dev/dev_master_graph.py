@@ -199,6 +199,11 @@ class DevMasterGraph:
             "ready_for_followup": False,
             "continuation_mode": str(continuation_handoff.get("continuation_mode", "off")).strip() or "off",
             "trigger_type": str(continuation_handoff.get("trigger_type", "initial")).strip() or "initial",
+            "continuation_guidance": {},
+            "needs_validation_clarification": False,
+            "validation_followup_options": [],
+            "browser_validation_adapter": handoff.get("browser_validation_adapter") if isinstance(handoff, dict) else None,
+            "validation_evidence": [],
         }
         initial_state["repository_memory"] = DevMasterGraph._initialize_repository_memory(initial_state, handoff)
         DevMasterGraph._emit_event(
@@ -2682,6 +2687,17 @@ class DevMasterGraph:
         preflight = state.get("dev_preflight_plan", {}) if isinstance(state.get("dev_preflight_plan"), dict) else {}
         raw_requirements = preflight.get("raw_validation_requirements", [])
         unresolved_requirements = preflight.get("unresolved_validation_requirements", [])
+        validation_strategy = (
+            preflight.get("validation_strategy", {})
+            if isinstance(preflight.get("validation_strategy"), dict)
+            else {}
+        )
+        followup_options = (
+            validation_strategy.get("followup_options", [])
+            if isinstance(validation_strategy.get("followup_options"), list)
+            else []
+        )
+        state["validation_followup_options"] = [x for x in followup_options if isinstance(x, dict)]
         unresolved_text = (
             [str(item.get("requirement", "")) for item in unresolved_requirements if isinstance(item, dict)]
             if isinstance(unresolved_requirements, list)
@@ -2694,6 +2710,47 @@ class DevMasterGraph:
                 "[VALIDATION] required validations were provided by PM but none were executable: "
                 f"{unresolved_text or unresolved_requirements}"
             )
+            browser_adapter = state.get("browser_validation_adapter")
+            if callable(browser_adapter):
+                try:
+                    adapter_result = browser_adapter(
+                        {
+                            "request_id": state.get("request_id", ""),
+                            "active_project_root": state.get("active_project_root", ""),
+                            "raw_requirements": raw_requirements,
+                            "unresolved_requirements": unresolved_requirements,
+                        }
+                    )
+                except Exception as exc:
+                    adapter_result = {"status": "failed", "error": str(exc)}
+                if isinstance(adapter_result, dict) and str(adapter_result.get("status", "")).strip() == "completed":
+                    state["validation_status"] = "completed"
+                    state["phase_status"]["execute_validation_phase"] = "completed"
+                    state["needs_validation_clarification"] = False
+                    state["validation_evidence"].append(
+                        {
+                            "strategy": "browser_adapter",
+                            "notes": str(adapter_result.get("notes", "browser adapter validation completed")).strip(),
+                            "steps": [
+                                str(x)
+                                for x in adapter_result.get("steps", [])
+                                if isinstance(x, str) and str(x).strip()
+                            ],
+                            "observations": [
+                                str(x)
+                                for x in adapter_result.get("observations", [])
+                                if isinstance(x, str) and str(x).strip()
+                            ],
+                        }
+                    )
+                    DevMasterGraph._emit_event(
+                        state,
+                        "validation_browser_adapter_completed",
+                        evidence=adapter_result,
+                    )
+                    DevMasterGraph._emit(state, "[VALIDATION] completed via browser adapter")
+                    return state
+            state["needs_validation_clarification"] = True
             for item in state.get("internal_checklist", []):
                 if isinstance(item, dict) and str(item.get("kind")) == "validation":
                     item["status"] = "blocked"
@@ -2718,6 +2775,13 @@ class DevMasterGraph:
                 "validation_skipped_non_executable",
                 unresolved_requirements=unresolved_requirements,
                 raw_requirements=raw_requirements,
+                followup_options=state.get("validation_followup_options", []),
+            )
+            DevMasterGraph._emit_event(
+                state,
+                "validation_clarification_required",
+                reason="non_executable_requirements",
+                followup_options=state.get("validation_followup_options", []),
             )
             DevMasterGraph._emit(state, msg)
             return state
@@ -2878,6 +2942,13 @@ class DevMasterGraph:
                 )
             else:
                 state["errors"].append("[FINAL_COMPILE] no terminating compile/build command inferred.")
+                state["needs_validation_clarification"] = True
+                DevMasterGraph._emit_event(
+                    state,
+                    "compile_inference_missing",
+                    reason="no_terminating_compile_command_inferred",
+                    followup_options=state.get("validation_followup_options", []),
+                )
                 state["final_compile_status"] = "failed"
                 state["phase_status"]["execute_final_compile_gate"] = "failed"
                 return state
@@ -3184,15 +3255,37 @@ class DevMasterGraph:
             "recoverable_blocked",
             "bootstrap_failed",
         }
+        needs_validation_clarification = bool(state.get("needs_validation_clarification", False))
+        continuation_guidance = {
+            "status": status,
+            "continuation_reason": continuation_reason_map.get(status, "continuation_not_available"),
+            "needs_validation_clarification": needs_validation_clarification,
+            "followup_options": (
+                [x for x in state.get("validation_followup_options", []) if isinstance(x, dict)]
+                if isinstance(state.get("validation_followup_options"), list)
+                else []
+            ),
+            "recommended_next_step": (
+                "Clarify validation approach and continue iterative improvement."
+                if needs_validation_clarification
+                else "Provide the next improvement requirement."
+            ),
+        }
         state["continuation_eligible"] = continuation_eligible
         state["ready_for_followup"] = continuation_eligible
         state["continuation_reason"] = continuation_reason_map.get(status, "continuation_not_available")
+        state["continuation_guidance"] = continuation_guidance
         DevMasterGraph._emit_event(
             state,
             "continuation_offered" if continuation_eligible else "continuation_blocked",
             status=status,
             continuation_eligible=continuation_eligible,
             continuation_reason=state.get("continuation_reason", ""),
+        )
+        DevMasterGraph._emit_event(
+            state,
+            "continuation_guidance_ready",
+            guidance=continuation_guidance,
         )
         err_count = len(state.get("errors", []))
         checklist_total = len(state.get("internal_checklist", []))
@@ -3214,7 +3307,8 @@ class DevMasterGraph:
             f"pass_status={state.get('implementation_pass_statuses', [])} "
             f"checklist={checklist_completed}/{checklist_total} "
             f"ready_for_followup={state.get('ready_for_followup', False)} "
-            f"continuation_reason={state.get('continuation_reason', '')}"
+            f"continuation_reason={state.get('continuation_reason', '')} "
+            f"needs_validation_clarification={bool(state.get('needs_validation_clarification', False))}"
         )
         outcomes = [x for x in state.get("task_outcomes", []) if isinstance(x, dict)]
         failed_outcomes = [x for x in outcomes if str(x.get("status", "")) != "completed"]

@@ -45,8 +45,79 @@ def _ask_followup() -> bool:
     return ans in {"", "y", "yes"}
 
 
-def _ask_delta_requirement() -> str:
-    return input("Describe the improvement/follow-up requirement: ").strip()
+def _ask_delta_requirement(
+    prompt: str = "Describe the improvement/follow-up requirement (or type 'done' to end): ",
+) -> str:
+    return input(prompt).strip()
+
+
+def _is_end_intent(text: str) -> bool:
+    normalized = " ".join(str(text or "").strip().lower().split())
+    if not normalized:
+        return False
+    explicit = {
+        "exit",
+        "end",
+        "stop",
+        "done",
+        "quit",
+        "no more",
+        "that's all",
+        "that is all",
+        "finish",
+        "finished",
+    }
+    if normalized in explicit:
+        return True
+    endings = (
+        "no more improvements",
+        "no further improvements",
+        "we are done",
+        "i am done",
+    )
+    return any(ending in normalized for ending in endings)
+
+
+def _format_followup_options(guidance: Dict[str, Any]) -> str:
+    options = guidance.get("followup_options", [])
+    if not isinstance(options, list):
+        return ""
+    formatted: list[str] = []
+    for idx, option in enumerate(options, start=1):
+        if not isinstance(option, dict):
+            continue
+        label = str(option.get("label", "")).strip()
+        description = str(option.get("description", "")).strip()
+        if not label:
+            continue
+        formatted.append(f"{idx}. {label}" + (f" - {description}" if description else ""))
+    return "\n".join(formatted).strip()
+
+
+def _collect_followup_requirement(*, status: str, guidance: Dict[str, Any]) -> tuple[str, str, str]:
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status == "completed" and not _ask_followup():
+        return ("close", "", "completed_user_confirmed_no_more_improvements")
+
+    needs_validation_clarification = bool(guidance.get("needs_validation_clarification", False))
+    options_text = _format_followup_options(guidance)
+    prompt = "Describe the next improvement requirement (or type 'done' to end): "
+    if needs_validation_clarification:
+        prompt = "Validation method is needed. Describe how to validate next (or type 'done' to end): "
+        if options_text:
+            print("[VALIDATION FOLLOW-UP OPTIONS]")
+            print(options_text)
+
+    while True:
+        delta = _ask_delta_requirement(prompt)
+        if _is_end_intent(delta):
+            return ("close", "", "explicit_end_intent")
+        if delta:
+            reason = "validation_clarification_provided" if needs_validation_clarification else "delta_requirement_provided"
+            return ("continue", delta, reason)
+        if normalized_status == "completed":
+            return ("close", "", "completed_no_additional_improvements")
+        print("[CONTINUATION] follow-up requirement is required for non-terminal status. Type 'done' to end.")
 
 
 def _env_flag(name: str, *, default: bool = False) -> bool:
@@ -127,7 +198,7 @@ def run(
     *,
     mode: str = "full",
     from_latest: bool = False,
-    continuation_mode: str = "off",
+    continuation_mode: str = "on",
     session_id: str = "",
     continue_from_request_id: str = "",
     delta_requirement: str = "",
@@ -199,6 +270,12 @@ def run(
                     "continuation_reason": "initial_delta",
                     "carry_forward_memory": True,
                     "immutable_constraints": loaded_handoff.get("constraints", []),
+                    "continuation_guidance": (
+                        dict(loaded_handoff.get("continuation", {}).get("continuation_guidance", {}))
+                        if isinstance(loaded_handoff.get("continuation"), dict)
+                        and isinstance(loaded_handoff.get("continuation", {}).get("continuation_guidance"), dict)
+                        else {}
+                    ),
                 }
             state.plan = create_plan(
                 requirement=initial_delta or requirement,
@@ -344,6 +421,7 @@ def run(
                         "final_status": state.dev_status,
                     },
                 )
+                session_store.close_session(active_session_id, reason="hard_stop_or_blocked")
                 _write_json(
                     os.path.join(artifacts_root, "session_summary.json"),
                     {
@@ -354,29 +432,32 @@ def run(
                     },
                 )
                 break
-            accept_followup = False
-            if continuation_mode == "always":
-                accept_followup = True
-            elif continuation_mode == "prompt":
-                accept_followup = _ask_followup()
+            guidance = result.get("continuation_guidance", {})
+            if not isinstance(guidance, dict):
+                guidance = {}
+            action, next_delta, decision_reason = _collect_followup_requirement(
+                status=state.dev_status,
+                guidance=guidance,
+            )
             _append_jsonl(
                 os.path.join(artifacts_root, "continuation_decisions.jsonl"),
                 {
-                    "event": "continuation_accepted" if accept_followup else "continuation_declined",
+                    "event": "continuation_accepted" if action == "continue" else "continuation_declined",
                     "session_id": active_session_id,
                     "request_id": state.request_id,
-                    "decision": "accepted" if accept_followup else "declined",
+                    "decision": "accepted" if action == "continue" else "declined",
+                    "reason": decision_reason,
                 },
             )
-            if not accept_followup:
-                session_store.close_session(active_session_id, reason="declined_followup")
+            if action != "continue":
+                session_store.close_session(active_session_id, reason=decision_reason or "declined_followup")
                 _append_jsonl(
                     os.path.join(artifacts_root, "continuation_decisions.jsonl"),
                     {
                         "event": "session_closed",
                         "session_id": active_session_id,
                         "request_id": state.request_id,
-                        "reason": "declined_followup",
+                        "reason": decision_reason or "declined_followup",
                     },
                 )
                 _write_json(
@@ -390,29 +471,7 @@ def run(
                 )
                 print(f"[SESSION] closed {active_session_id}")
                 break
-            initial_delta = _ask_delta_requirement().strip()
-            if not initial_delta:
-                session_store.close_session(active_session_id, reason="empty_followup")
-                _append_jsonl(
-                    os.path.join(artifacts_root, "continuation_decisions.jsonl"),
-                    {
-                        "event": "session_closed",
-                        "session_id": active_session_id,
-                        "request_id": state.request_id,
-                        "reason": "empty_followup",
-                    },
-                )
-                _write_json(
-                    os.path.join(artifacts_root, "session_summary.json"),
-                    {
-                        "session_id": active_session_id,
-                        "status": "closed",
-                        "last_request_id": state.request_id,
-                        "last_status": state.dev_status,
-                    },
-                )
-                print(f"[SESSION] closed {active_session_id}")
-                break
+            initial_delta = next_delta.strip()
             _append_jsonl(
                 os.path.join(artifacts_root, "requirement_deltas.jsonl"),
                 {
@@ -420,8 +479,19 @@ def run(
                     "session_id": active_session_id,
                     "parent_request_id": state.request_id,
                     "delta_requirement": initial_delta,
+                    "reason": decision_reason,
                 },
             )
+            if bool(guidance.get("needs_validation_clarification", False)):
+                _append_jsonl(
+                    os.path.join(artifacts_root, "continuation_decisions.jsonl"),
+                    {
+                        "event": "clarification_requested",
+                        "session_id": active_session_id,
+                        "request_id": state.request_id,
+                        "reason": "validation_method_required",
+                    },
+                )
             continuation_ctx = {
                 "session_id": active_session_id,
                 "parent_request_id": state.request_id,
@@ -433,6 +503,7 @@ def run(
                 "continuation_reason": "user_followup",
                 "carry_forward_memory": True,
                 "immutable_constraints": state.plan.get("constraints", []) if isinstance(state.plan, dict) else [],
+                "continuation_guidance": guidance,
             }
             state.request_id = str(uuid.uuid4())
             state.plan = create_plan(
@@ -459,6 +530,8 @@ def run(
             loaded_handoff = latest_context.get("dev_handoff") if isinstance(latest_context, dict) else None
             loaded_request_id = state.request_id
             continue
+        if bool(result.get("continuation_eligible", False)):
+            print("[CONTINUATION] follow-up available but continuation mode is disabled; exiting one-shot run.")
         break
     return 0
 

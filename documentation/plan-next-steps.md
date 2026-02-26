@@ -131,6 +131,8 @@ Detailed execution and runtime-failure recovery handoff:
 
 - Lower cascade checklist failures from one target mismatch.
 - Validation phase runs for most tasks instead of being skipped due to early abort.
+- When executable validation is unavailable, continuation remains interactive via clarification-driven manual/browser validation fallback.
+- Non-terminal outcomes (`partial_progress`, `recoverable_blocked`, `bootstrap_failed`) continue in-session until explicit user end intent.
 
 ## Milestone E: Intent-based Capability Router
 

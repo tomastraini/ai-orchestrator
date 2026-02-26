@@ -102,6 +102,9 @@ class TerminalFailureGateTests(unittest.TestCase):
             self.assertEqual(out.get("status"), "partial_progress")
             self.assertTrue(bool(out.get("ready_for_followup")))
             self.assertTrue(bool(out.get("continuation_eligible")))
+            guidance = out.get("continuation_guidance", {})
+            self.assertIsInstance(guidance, dict)
+            self.assertIn("recommended_next_step", guidance)
 
     def test_finalize_blocks_followup_on_implementation_failed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -125,6 +128,33 @@ class TerminalFailureGateTests(unittest.TestCase):
             out = DevMasterGraph._finalize_result_impl(state)  # type: ignore[arg-type]
             self.assertEqual(out.get("status"), "implementation_failed")
             self.assertFalse(bool(out.get("continuation_eligible")))
+
+    def test_final_compile_missing_inference_sets_validation_clarification_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = {
+                "scope_root": tmp,
+                "request_id": "req-compile-missing",
+                "current_step": "",
+                "logs": [],
+                "errors": [],
+                "task_outcomes": [],
+                "touched_paths": [],
+                "attempt_history": [],
+                "phase_status": {"execute_final_compile_gate": "pending"},
+                "bootstrap_status": "completed",
+                "implementation_status": "completed",
+                "validation_status": "completed",
+                "final_compile_tasks": [],
+                "detected_stacks": ["generic"],
+                "active_project_root": tmp,
+                "validation_followup_options": [{"id": "manual", "label": "Manual validation"}],
+                "telemetry_events": [],
+            }
+            out = DevMasterGraph._execute_final_compile_gate_impl(state)  # type: ignore[arg-type]
+            self.assertEqual(out.get("final_compile_status"), "failed")
+            self.assertTrue(bool(out.get("needs_validation_clarification")))
+            events = [event for event in out.get("telemetry_events", []) if isinstance(event, dict)]
+            self.assertTrue(any(str(event.get("category", "")) == "compile_inference_missing" for event in events))
 
 
 if __name__ == "__main__":
