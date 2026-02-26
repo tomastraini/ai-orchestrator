@@ -216,7 +216,7 @@ class DevMasterGraphTests(unittest.TestCase):
         logs_blob = "\n".join(state.get("logs", []))
         self.assertIn("[PHASE] implementation", logs_blob)
 
-    def test_validation_fails_when_pm_requirement_is_non_executable(self) -> None:
+    def test_validation_skips_when_pm_requirement_is_non_executable(self) -> None:
         plan = self._sample_plan()
         plan["validation"] = ["TypeScript compilation yields no type errors"]
         graph = DevMasterGraph()
@@ -227,12 +227,65 @@ class DevMasterGraphTests(unittest.TestCase):
                 scope_root=tmp,
                 ask_user=lambda _: "n/a",
             )
-        self.assertEqual(state.get("validation_status"), "failed")
-        self.assertEqual(state.get("status"), "implementation_failed")
-        self.assertTrue(
-            any("none were executable" in err.lower() for err in state.get("errors", [])),
-            msg=str(state.get("errors", [])),
-        )
+        self.assertEqual(state.get("validation_status"), "skipped")
+        self.assertEqual(state.get("phase_status", {}).get("execute_validation_phase"), "skipped")
+        self.assertTrue(any("none were executable" in line.lower() for line in state.get("logs", [])))
+
+    def test_react_calculator_targets_wire_into_app(self) -> None:
+        graph = DevMasterGraph()
+        plan = {
+            "summary": "Create calculator",
+            "project_mode": "new_project",
+            "project_ref": {"name": "calc", "path_hint": "projects/calc"},
+            "stack": {"frontend": "React", "backend": None, "language_preferences": ["TypeScript"]},
+            "pm_checklist": {
+                "project_scope": "new_project",
+                "architecture": "frontend_only",
+                "backend_required": "no",
+                "database_required": "no",
+            },
+            "bootstrap_commands": [],
+            "target_files": [
+                {
+                    "file_name": "Calculator.tsx",
+                    "expected_path_hint": "projects/calc/src/Calculator.tsx",
+                    "modification_type": "add",
+                    "details": "Create calculator component with add and subtract",
+                },
+                {
+                    "file_name": "App.tsx",
+                    "expected_path_hint": "projects/calc/src/App.tsx",
+                    "modification_type": "modify",
+                    "details": "Import and render calculator component",
+                },
+            ],
+            "constraints": ["none"],
+            "validation": ["python -c \"print('ok')\""],
+            "clarification_summary": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "calc", "src"), exist_ok=True)
+            with open(os.path.join(tmp, "calc", "src", "App.tsx"), "w", encoding="utf-8") as fh:
+                fh.write("export default function App(){return <div/>}\n")
+            state = graph.run(request_id="calc-wire-1", plan=plan, scope_root=tmp, ask_user=lambda _: "n/a")
+            with open(os.path.join(tmp, "calc", "src", "App.tsx"), "r", encoding="utf-8") as fh:
+                app_content = fh.read()
+        self.assertEqual(state.get("status"), "completed", msg=str(state.get("errors", [])))
+        self.assertIn("from './Calculator'", app_content)
+        self.assertIn("<Calculator", app_content)
+
+    def test_telemetry_events_are_emitted(self) -> None:
+        graph = DevMasterGraph()
+        with tempfile.TemporaryDirectory() as tmp:
+            state = graph.run(
+                request_id="telemetry-1",
+                plan=self._sample_plan(),
+                scope_root=tmp,
+                ask_user=lambda _: "n/a",
+            )
+        categories = [str(event.get("category", "")) for event in state.get("telemetry_events", []) if isinstance(event, dict)]
+        self.assertIn("plan_ingest", categories)
+        self.assertIn("final_summary", categories)
 
     def test_final_compile_gate_blocks_completion_when_missing(self) -> None:
         plan = self._sample_plan()

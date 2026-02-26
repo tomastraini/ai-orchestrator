@@ -5,6 +5,7 @@ import re
 import subprocess
 import threading
 import time
+import json
 from queue import Empty, Queue
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
@@ -30,6 +31,11 @@ SERVICE_READY_REGEX = re.compile(
     r"(ready in|localhost:|listening on|started|running at|vite v\d)",
     re.IGNORECASE,
 )
+SECRET_PATTERNS = [
+    re.compile(r"(api[_-]?key\s*[:=]\s*)([^\s\"']+)", re.IGNORECASE),
+    re.compile(r"(token\s*[:=]\s*)([^\s\"']+)", re.IGNORECASE),
+    re.compile(r"(password\s*[:=]\s*)([^\s\"']+)", re.IGNORECASE),
+]
 
 
 def _normalize_scope_path(path: str) -> str:
@@ -99,6 +105,30 @@ def _emit(logs: List[str], message: str, log_sink: Optional[Callable[[str], None
             log_sink(message)
         except Exception:
             # Log streaming should never break execution.
+            pass
+
+
+def _sanitize_log_value(value: Any, max_length: int = 500) -> str:
+    text = str(value or "")
+    if len(text) > max_length:
+        text = f"{text[:max_length]}... [truncated {len(text) - max_length} chars]"
+    for pattern in SECRET_PATTERNS:
+        text = pattern.sub(r"\1[REDACTED]", text)
+    return text
+
+
+def _emit_event(
+    logs: List[str],
+    event: Dict[str, Any],
+    log_sink: Optional[Callable[[str], None]],
+    event_sink: Optional[Callable[[Dict[str, Any]], None]],
+) -> None:
+    payload = dict(event)
+    _emit(logs, f"[EVENT] {json.dumps(payload, sort_keys=True)}", log_sink)
+    if callable(event_sink):
+        try:
+            event_sink(payload)
+        except Exception:
             pass
 
 
@@ -434,6 +464,7 @@ def execute_dev_tasks(
     heartbeat_seconds: float = 15.0,
     ask_confirmation: Optional[Callable[[str], bool]] = None,
     ask_runtime_prompt: Optional[Callable[[str], str]] = None,
+    event_sink: Optional[Callable[[Dict[str, Any]], None]] = None,
     stack_hint: str = "generic",
     interactive_prompt_timeout_seconds: float = 60.0,
     constraints: Optional[List[str]] = None,
@@ -453,14 +484,43 @@ def execute_dev_tasks(
     for task in tasks:
         if not task.command:
             _emit(logs, f"[SKIP] {task.id}: no command for task '{task.description}'", log_sink)
+            _emit_event(
+                logs,
+                {"category": "task_skip", "task_id": task.id, "reason": "missing_command"},
+                log_sink,
+                event_sink,
+            )
             continue
 
         if _is_blocked_command(task.command):
             errors.append(f"[BLOCKED] {task.id}: outbound push is disabled ('{task.command}')")
+            _emit_event(
+                logs,
+                {
+                    "category": "task_blocked",
+                    "task_id": task.id,
+                    "reason": "blocked_command",
+                    "command": _sanitize_log_value(task.command, 200),
+                },
+                log_sink,
+                event_sink,
+            )
             break
         violated_reason = _violates_constraints(task.command, active_constraints)
         if violated_reason:
             errors.append(f"[BLOCKED] {task.id}: {violated_reason} ('{task.command}')")
+            _emit_event(
+                logs,
+                {
+                    "category": "task_blocked",
+                    "task_id": task.id,
+                    "reason": "constraint_violation",
+                    "detail": _sanitize_log_value(violated_reason, 200),
+                    "command": _sanitize_log_value(task.command, 200),
+                },
+                log_sink,
+                event_sink,
+            )
             break
         is_risky, reason = assess_risk(task.command)
         if is_risky:
@@ -487,6 +547,22 @@ def execute_dev_tasks(
         deterministic_budget = max(1, max_retries - llm_reserved)
         inferred_stack = stack_hint or detect_stack_from_command(task.command)
         current_command = normalize_command_for_stack(task.command, inferred_stack)
+        _emit_event(
+            logs,
+            {
+                "category": "command_provenance",
+                "task_id": task.id,
+                "task_kind": task.kind,
+                "cwd": cwd,
+                "stack_hint": stack_hint,
+                "inferred_stack": inferred_stack,
+                "original_command": _sanitize_log_value(task.command, 240),
+                "normalized_command": _sanitize_log_value(current_command, 240),
+                "constraints_count": len(active_constraints),
+            },
+            log_sink,
+            event_sink,
+        )
         attempted_commands: List[str] = []
         last_error: Optional[str] = None
         last_attempt: Optional[Dict[str, Any]] = None
@@ -517,6 +593,25 @@ def execute_dev_tasks(
             attempt_history.append(attempt)
             last_attempt = attempt
             last_error = run_error
+            _emit_event(
+                logs,
+                {
+                    "category": "run_attempt",
+                    "task_id": task.id,
+                    "attempt": attempt_idx,
+                    "strategy": strategy,
+                    "command": _sanitize_log_value(current_command, 240),
+                    "exit_code": attempt.get("exit_code"),
+                    "failure_category": attempt.get("category", "unknown"),
+                    "elapsed_ms": attempt.get("elapsed_ms", 0),
+                    "run_mode": attempt.get("run_mode", effective_run_mode),
+                    "smoke_ready": bool(attempt.get("smoke_ready", False)),
+                    "stdout_preview": _sanitize_log_value(attempt.get("stdout", ""), 220),
+                    "stderr_preview": _sanitize_log_value(attempt.get("stderr", ""), 220),
+                },
+                log_sink,
+                event_sink,
+            )
 
             if run_error is None:
                 last_error = None
@@ -532,6 +627,19 @@ def execute_dev_tasks(
                     ,
                     log_sink,
                 )
+                _emit_event(
+                    logs,
+                    {
+                        "category": "retry_decision",
+                        "task_id": task.id,
+                        "attempt": attempt_idx,
+                        "decision": "stop",
+                        "reason": "no_deterministic_rewrite",
+                        "failure_category": category,
+                    },
+                    log_sink,
+                    event_sink,
+                )
                 break
             _emit(
                 logs,
@@ -544,6 +652,21 @@ def execute_dev_tasks(
                 f"[WHY_RETRY] category={category} old_command={current_command} "
                 f"new_command={rewritten}",
                 log_sink,
+            )
+            _emit_event(
+                logs,
+                {
+                    "category": "retry_decision",
+                    "task_id": task.id,
+                    "attempt": attempt_idx + 1,
+                    "decision": "retry",
+                    "reason": "deterministic_rewrite",
+                    "failure_category": category,
+                    "old_command": _sanitize_log_value(current_command, 200),
+                    "new_command": _sanitize_log_value(rewritten, 200),
+                },
+                log_sink,
+                event_sink,
             )
             current_command = rewritten
 
@@ -584,6 +707,17 @@ def execute_dev_tasks(
                         "evidence": {"attempted_commands": attempted_commands},
                     }
                 )
+                _emit_event(
+                    logs,
+                    {
+                        "category": "task_outcome",
+                        "task_id": task.id,
+                        "status": "pending_llm",
+                        "failure_category": last_attempt.get("category", "unknown"),
+                    },
+                    log_sink,
+                    event_sink,
+                )
             else:
                 errors.append(last_error)
                 task_outcomes.append(
@@ -598,6 +732,18 @@ def execute_dev_tasks(
                         "run_mode": (last_attempt or {}).get("run_mode", "terminating"),
                         "evidence": {"attempted_commands": attempted_commands},
                     }
+                )
+                _emit_event(
+                    logs,
+                    {
+                        "category": "task_outcome",
+                        "task_id": task.id,
+                        "status": "failed",
+                        "failure_category": (last_attempt or {}).get("category", "unknown"),
+                        "error": _sanitize_log_value(last_error, 220),
+                    },
+                    log_sink,
+                    event_sink,
                 )
             break
         task_outcomes.append(
@@ -615,6 +761,18 @@ def execute_dev_tasks(
                     "smoke_ready": bool((last_attempt or {}).get("smoke_ready", False)),
                 },
             }
+        )
+        _emit_event(
+            logs,
+            {
+                "category": "task_outcome",
+                "task_id": task.id,
+                "status": "completed",
+                "attempts": len(attempted_commands),
+                "run_mode": (last_attempt or {}).get("run_mode", "terminating"),
+            },
+            log_sink,
+            event_sink,
         )
 
     return logs, touched_paths, errors, attempt_history, pending_llm_task, task_outcomes

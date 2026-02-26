@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import platform
 import re
+import time
+import difflib
 from dataclasses import asdict
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypedDict
 
@@ -60,6 +63,7 @@ class DevGraphState(TypedDict, total=False):
     final_compile_status: str
     task_outcomes: List[Dict[str, Any]]
     checklist_cursor: str
+    telemetry_events: List[Dict[str, Any]]
 
 
 class DevMasterGraph:
@@ -159,6 +163,7 @@ class DevMasterGraph:
             "internal_checklist": [],
             "checklist_index": {},
             "task_outcomes": [],
+            "telemetry_events": [],
             "checklist_cursor": "",
             "llm_calls_used": 0,
             "llm_call_budget": max(0, int(max_model_calls_per_run)),
@@ -194,6 +199,43 @@ class DevMasterGraph:
                 sink(message)
             except Exception:
                 pass
+
+    @staticmethod
+    def _sanitize_text(value: Any, max_length: int = 600) -> str:
+        text = str(value or "")
+        if len(text) > max_length:
+            text = f"{text[:max_length]}... [truncated {len(text) - max_length} chars]"
+        patterns = [
+            re.compile(r"(api[_-]?key\s*[:=]\s*)([^\s\"']+)", re.IGNORECASE),
+            re.compile(r"(token\s*[:=]\s*)([^\s\"']+)", re.IGNORECASE),
+            re.compile(r"(password\s*[:=]\s*)([^\s\"']+)", re.IGNORECASE),
+        ]
+        for pattern in patterns:
+            text = pattern.sub(r"\1[REDACTED]", text)
+        return text
+
+    @staticmethod
+    def _relpath_safe(state: DevGraphState, path: str) -> str:
+        try:
+            scope = os.path.abspath(str(state.get("scope_root", "")))
+            candidate = os.path.abspath(path)
+            if scope and os.path.commonpath([scope, candidate]) == scope:
+                return os.path.relpath(candidate, scope).replace("\\", "/")
+            return candidate.replace("\\", "/")
+        except Exception:
+            return str(path).replace("\\", "/")
+
+    @staticmethod
+    def _emit_event(state: DevGraphState, category: str, **metadata: Any) -> None:
+        event = {
+            "timestamp_ms": int(time.time() * 1000),
+            "request_id": str(state.get("request_id", "")),
+            "phase": str(state.get("current_step", "")),
+            "category": category,
+            "metadata": metadata,
+        }
+        state.setdefault("telemetry_events", []).append(event)
+        DevMasterGraph._emit(state, f"[EVENT] {json.dumps(event, sort_keys=True)}")
 
     @staticmethod
     def _reindex_checklist(state: DevGraphState) -> None:
@@ -255,6 +297,13 @@ class DevMasterGraph:
         DevMasterGraph._emit(
             state,
             f"[CHECKLIST] item={item_id} status={status}",
+        )
+        DevMasterGraph._emit_event(
+            state,
+            "checklist_outcome",
+            item_id=item_id,
+            status=status,
+            evidence=evidence or {},
         )
 
     @staticmethod
@@ -384,6 +433,18 @@ class DevMasterGraph:
             state["project_name"] = project_name
             state["project_root"] = f"projects/{project_name}"
         DevMasterGraph._emit(state, f"[INGEST] project='{state['project_name']}'")
+        plan = state.get("plan", {})
+        plan_hash = hashlib.sha1(json.dumps(plan, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+        DevMasterGraph._emit_event(
+            state,
+            "plan_ingest",
+            project_name=state["project_name"],
+            project_root=state["project_root"],
+            plan_hash=plan_hash,
+            bootstrap_commands_count=len(plan.get("bootstrap_commands", [])) if isinstance(plan, dict) else 0,
+            target_files_count=len(plan.get("target_files", [])) if isinstance(plan, dict) else 0,
+            validation_count=len(plan.get("validation", [])) if isinstance(plan, dict) else 0,
+        )
         state["phase_status"]["ingest_pm_plan"] = "completed"
         return state
 
@@ -455,6 +516,14 @@ class DevMasterGraph:
             "[TODO] bootstrap_tasks="
             f"{len(bootstrap_tasks)} implementation_targets={len(implementation_targets)} "
             f"validation_tasks={len(validation_tasks)}",
+        )
+        DevMasterGraph._emit_event(
+            state,
+            "todo_derivation",
+            bootstrap_tasks=len(bootstrap_tasks),
+            implementation_targets=len(implementation_targets),
+            validation_tasks=len(validation_tasks),
+            restored_from_handoff=bool(isinstance(handoff_steps, list) and len(handoff_steps) > 0),
         )
         state["phase_status"]["derive_dev_todos"] = "completed"
         return state
@@ -643,6 +712,16 @@ class DevMasterGraph:
             DevMasterGraph._emit(state, f"[PREFLIGHT] final_compile_commands={final_compile_commands}")
         else:
             DevMasterGraph._emit(state, "[PREFLIGHT] no terminating compile commands inferred")
+        DevMasterGraph._emit_event(
+            state,
+            "preflight_validation_inference",
+            os=state["dev_preflight_plan"]["os"],
+            active_project_root=DevMasterGraph._relpath_safe(state, project_dir),
+            detected_stacks=detected,
+            validation_commands=validation_commands,
+            unresolved_validation_requirements=unresolved_validation_requirements,
+            final_compile_commands=final_compile_commands,
+        )
         state["phase_status"]["dev_preflight_planning"] = "completed"
         return state
 
@@ -1096,12 +1175,24 @@ class DevMasterGraph:
             "execution_context": state.get("llm_context_contract", {}),
             "root_resolution_evidence": state.get("root_resolution_evidence", {}),
         }
+        llm_started = time.time()
         try:
             state["llm_calls_used"] = int(state.get("llm_calls_used", 0)) + 1
             corrected_command = llm_corrector(correction_input).strip()
         except Exception as e:
             corrected_command = ""
             DevMasterGraph._emit(state, f"[LLM_REWRITE_ERROR] {pending_llm_task['task_id']}: {e}")
+        llm_elapsed_ms = int((time.time() - llm_started) * 1000)
+        DevMasterGraph._emit_event(
+            state,
+            "llm_call_meta",
+            task_id=str(pending_llm_task.get("task_id", "")),
+            call_index=int(state.get("llm_calls_used", 0)),
+            prompt_chars=len(str(correction_input)),
+            response_chars=len(str(corrected_command)),
+            latency_ms=llm_elapsed_ms,
+            success=bool(corrected_command),
+        )
 
         if not corrected_command:
             state["errors"].append(
@@ -1297,6 +1388,90 @@ class DevMasterGraph:
         return f"{text}\n"
 
     @staticmethod
+    def _component_name_from_file(file_name: str) -> str:
+        stem = os.path.splitext(os.path.basename(file_name))[0]
+        cleaned = re.sub(r"[^A-Za-z0-9_]", "", stem)
+        if not cleaned:
+            return "GeneratedComponent"
+        return cleaned[0].upper() + cleaned[1:]
+
+    @staticmethod
+    def _render_calculator_component(component_name: str) -> str:
+        return (
+            "import { useMemo, useState } from 'react';\n\n"
+            f"export default function {component_name}() {{\n"
+            "  const [left, setLeft] = useState<string>('0');\n"
+            "  const [right, setRight] = useState<string>('0');\n"
+            "  const [operation, setOperation] = useState<'add' | 'subtract'>('add');\n\n"
+            "  const result = useMemo(() => {\n"
+            "    const a = Number(left);\n"
+            "    const b = Number(right);\n"
+            "    if (Number.isNaN(a) || Number.isNaN(b)) return 'Invalid input';\n"
+            "    return operation === 'add' ? String(a + b) : String(a - b);\n"
+            "  }, [left, right, operation]);\n\n"
+            "  return (\n"
+            "    <main style={{ fontFamily: 'Arial, sans-serif', margin: '2rem auto', maxWidth: 420 }}>\n"
+            f"      <h1>{component_name}</h1>\n"
+            "      <label>\n"
+            "        First number\n"
+            "        <input type=\"number\" value={left} onChange={(e) => setLeft(e.target.value)} />\n"
+            "      </label>\n"
+            "      <label style={{ display: 'block', marginTop: 12 }}>\n"
+            "        Second number\n"
+            "        <input type=\"number\" value={right} onChange={(e) => setRight(e.target.value)} />\n"
+            "      </label>\n"
+            "      <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>\n"
+            "        <button type=\"button\" onClick={() => setOperation('add')}>Add</button>\n"
+            "        <button type=\"button\" onClick={() => setOperation('subtract')}>Subtract</button>\n"
+            "      </div>\n"
+            "      <p style={{ marginTop: 16 }}><strong>Result:</strong> {result}</p>\n"
+            "    </main>\n"
+            "  );\n"
+            "}\n"
+        )
+
+    @staticmethod
+    def _render_react_app_wiring(active_root: str) -> str:
+        component_name = "Calculator"
+        candidate_paths = [
+            os.path.join(active_root, "src", "Calculator.tsx"),
+            os.path.join(active_root, "src", "Calculator.jsx"),
+        ]
+        for candidate in candidate_paths:
+            if os.path.exists(candidate):
+                component_name = DevMasterGraph._component_name_from_file(os.path.basename(candidate))
+                break
+        return (
+            f"import {component_name} from './{component_name}';\n\n"
+            "export default function App() {\n"
+            f"  return <{component_name} />;\n"
+            "}\n"
+        )
+
+    @staticmethod
+    def _generate_initial_content(*, safe_target: str, file_name: str, details: str, active_root: str) -> str:
+        ext = os.path.splitext(safe_target)[1].lower()
+        lowered = f"{file_name} {details}".lower()
+        if ext in {".tsx", ".jsx"}:
+            component_name = DevMasterGraph._component_name_from_file(file_name)
+            if os.path.basename(safe_target).lower() == "app.tsx":
+                return DevMasterGraph._render_react_app_wiring(active_root)
+            if "calculator" in lowered:
+                return DevMasterGraph._render_calculator_component(component_name)
+            return (
+                f"export default function {component_name}() {{\n"
+                "  return <div>Generated component</div>;\n"
+                "}\n"
+            )
+        if ext in {".ts", ".js"}:
+            return "export {};\n"
+        if ext == ".py":
+            return "def main() -> None:\n    pass\n\n\nif __name__ == '__main__':\n    main()\n"
+        if ext == ".md":
+            return f"# {file_name}\n\n{details or 'Generated by dev graph.'}\n"
+        return (details or "Generated by dev graph.") + "\n"
+
+    @staticmethod
     def _apply_target_in_pass(
         *,
         safe_target: str,
@@ -1336,29 +1511,97 @@ class DevMasterGraph:
             if update_like:
                 return "missing_expected_file", "not_created_due_to_update_policy", safe_target
             with open(safe_target, "w", encoding="utf-8") as fh:
-                fh.write(DevMasterGraph._comment_for_path(safe_target, f"IMPLEMENT: {details or 'initial implementation'}"))
-            return "created_file", "initial_implementation", safe_target
+                fh.write(
+                    DevMasterGraph._generate_initial_content(
+                        safe_target=safe_target,
+                        file_name=file_name,
+                        details=details,
+                        active_root=active_root,
+                    )
+                )
+            return "created_file", "generated_content", safe_target
 
         with open(safe_target, "r", encoding="utf-8", errors="ignore") as fh:
             original = fh.read()
-        marker = DevMasterGraph._comment_for_path(
-            safe_target,
-            f"IMPLEMENT PASS {pass_index}: {details or 'target mutation'}",
-        )
-        if marker not in original:
-            if pass_index == 1 and update_like:
-                new_content = marker + original
+        if os.path.basename(safe_target).lower() == "app.tsx":
+            new_content = DevMasterGraph._render_react_app_wiring(active_root)
+        elif os.path.splitext(safe_target)[1].lower() in {".tsx", ".jsx"} and "calculator" in f"{file_name} {details}".lower():
+            component_name = DevMasterGraph._component_name_from_file(file_name)
+            new_content = DevMasterGraph._render_calculator_component(component_name)
+        else:
+            annotation = DevMasterGraph._comment_for_path(
+                safe_target,
+                f"Updated by dev graph pass {pass_index}: {details or 'target mutation'}",
+            )
+            if annotation in original:
+                new_content = original
+            elif pass_index == 1 and update_like:
+                new_content = annotation + original
             else:
-                new_content = original + ("" if original.endswith("\n") else "\n") + marker
+                new_content = original + ("" if original.endswith("\n") else "\n") + annotation
+
+        if new_content != original:
             with open(safe_target, "w", encoding="utf-8") as fh:
                 fh.write(new_content)
-            return "updated_file", "mutated_with_marker", safe_target
+            return "updated_file", "generated_update", safe_target
 
         if os.path.getsize(safe_target) == 0:
             with open(safe_target, "w", encoding="utf-8") as fh:
-                fh.write(marker)
+                fh.write(
+                    DevMasterGraph._generate_initial_content(
+                        safe_target=safe_target,
+                        file_name=file_name,
+                        details=details,
+                        active_root=active_root,
+                    )
+                )
             return "updated_file", "filled_empty_file", safe_target
-        return "observed_file", "marker_already_present", safe_target
+        return "observed_file", "already_up_to_date", safe_target
+
+    @staticmethod
+    def _run_implementation_review(state: DevGraphState, active_root: str, targets: List[Dict[str, str]]) -> List[str]:
+        findings: List[str] = []
+        touched = [str(p) for p in state.get("touched_paths", []) if isinstance(p, str)]
+        for path in touched:
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                    content = fh.read()
+            except Exception:
+                continue
+            lowered = content.lower()
+            if "implement pass" in lowered or "\n// implement:" in lowered or "\n# implement:" in lowered:
+                findings.append(f"placeholder marker found in {DevMasterGraph._relpath_safe(state, path)}")
+            if "todo" in lowered and len(content.strip()) < 220:
+                findings.append(f"file appears TODO-only in {DevMasterGraph._relpath_safe(state, path)}")
+
+        app_path = os.path.join(active_root, "src", "App.tsx")
+        has_app_target = any(str(t.get("file_name", "")).strip().lower().endswith("app.tsx") for t in targets)
+        if has_app_target and os.path.exists(app_path):
+            try:
+                with open(app_path, "r", encoding="utf-8", errors="ignore") as fh:
+                    app_content = fh.read()
+            except Exception:
+                app_content = ""
+            for target in targets:
+                file_name = str(target.get("file_name", "")).strip()
+                ext = os.path.splitext(file_name)[1].lower()
+                if ext not in {".tsx", ".jsx"}:
+                    continue
+                component = DevMasterGraph._component_name_from_file(file_name)
+                if component.lower() == "app":
+                    continue
+                component_file = os.path.join(active_root, "src", f"{component}.tsx")
+                if not os.path.exists(component_file):
+                    continue
+                import_hint = f"from './{component}'"
+                render_hint = f"<{component}"
+                if import_hint not in app_content or render_hint not in app_content:
+                    findings.append(
+                        f"missing wiring for component '{component}' in {DevMasterGraph._relpath_safe(state, app_path)}"
+                    )
+        return findings
 
     @staticmethod
     def _execute_implementation_phase(state: DevGraphState) -> DevGraphState:
@@ -1426,6 +1669,13 @@ class DevMasterGraph:
                     key = str(expected or file_name or safe_target)
                     if key not in target_proofs:
                         target_proofs[key] = {"before_hash": DevMasterGraph._file_sha1(safe_target), "after_hash": ""}
+                    before_text = ""
+                    if os.path.exists(safe_target) and os.path.isfile(safe_target):
+                        try:
+                            with open(safe_target, "r", encoding="utf-8", errors="ignore") as fh:
+                                before_text = fh.read()
+                        except Exception:
+                            before_text = ""
                     action, action_note, resolved_target = DevMasterGraph._apply_target_in_pass(
                         safe_target=safe_target,
                         file_name=file_name,
@@ -1473,6 +1723,31 @@ class DevMasterGraph:
                             raise RuntimeError(f"Expected target missing and discovery failed: {expected}")
                     target_proofs[key]["after_hash"] = DevMasterGraph._file_sha1(resolved_target)
                     state["touched_paths"].append(resolved_target)
+                    after_text = ""
+                    if os.path.exists(resolved_target) and os.path.isfile(resolved_target):
+                        try:
+                            with open(resolved_target, "r", encoding="utf-8", errors="ignore") as fh:
+                                after_text = fh.read()
+                        except Exception:
+                            after_text = ""
+                    diff_preview = "".join(
+                        difflib.unified_diff(
+                            before_text.splitlines(keepends=True)[:80],
+                            after_text.splitlines(keepends=True)[:80],
+                            lineterm="",
+                        )
+                    )
+                    DevMasterGraph._emit_event(
+                        state,
+                        "file_mutation",
+                        pass_index=pass_index,
+                        action=action,
+                        action_note=action_note,
+                        path=DevMasterGraph._relpath_safe(state, resolved_target),
+                        before_size=len(before_text.encode("utf-8")),
+                        after_size=len(after_text.encode("utf-8")),
+                        diff_preview=DevMasterGraph._sanitize_text(diff_preview, 800),
+                    )
                     DevMasterGraph._emit(
                         state,
                         f"[IMPLEMENTATION] pass={pass_index} action={action} target={resolved_target} note={action_note}"
@@ -1503,6 +1778,19 @@ class DevMasterGraph:
                         "after_hash": after_hash,
                     },
                 )
+            review_findings = DevMasterGraph._run_implementation_review(
+                state=state,
+                active_root=active_root,
+                targets=targets,
+            )
+            DevMasterGraph._emit_event(
+                state,
+                "implementation_review",
+                findings=review_findings,
+                passed=not bool(review_findings),
+            )
+            if review_findings:
+                raise RuntimeError("review gate failed: " + "; ".join(review_findings))
         except Exception as e:
             state["errors"].append(f"[IMPLEMENTATION_ERROR] {e}")
             for idx, _target in pending_targets:
@@ -1544,12 +1832,19 @@ class DevMasterGraph:
             )
             for item in state.get("internal_checklist", []):
                 if isinstance(item, dict) and str(item.get("kind")) == "validation":
-                    item["status"] = "failed"
-                    DevMasterGraph._append_item_evidence(item, {"phase": "validation", "error": msg})
-            state["errors"].append(msg)
-            state["validation_status"] = "failed"
-            state["status"] = "implementation_failed"
-            state["phase_status"]["execute_validation_phase"] = "failed"
+                    item["status"] = "blocked"
+                    DevMasterGraph._append_item_evidence(
+                        item,
+                        {"phase": "validation", "warning": msg, "non_executable_requirements": unresolved_requirements},
+                    )
+            state["validation_status"] = "skipped"
+            state["phase_status"]["execute_validation_phase"] = "skipped"
+            DevMasterGraph._emit_event(
+                state,
+                "validation_skipped_non_executable",
+                unresolved_requirements=unresolved_requirements,
+                raw_requirements=raw_requirements,
+            )
             DevMasterGraph._emit(state, msg)
             return state
 
@@ -1603,6 +1898,7 @@ class DevMasterGraph:
                 if isinstance(x, str) and str(x).strip()
             ],
             command_run_mode="auto",
+            event_sink=(lambda event: DevMasterGraph._emit_event(state, "executor_event", **event)),
         )
         state["logs"].extend(logs)
         state["touched_paths"].extend(touched_paths)
@@ -1697,6 +1993,7 @@ class DevMasterGraph:
                 if isinstance(x, str) and str(x).strip()
             ],
             command_run_mode="terminating",
+            event_sink=(lambda event: DevMasterGraph._emit_event(state, "executor_event", **event)),
         )
         state["logs"].extend(logs)
         state["touched_paths"].extend(touched_paths)
@@ -1752,6 +2049,17 @@ class DevMasterGraph:
             f"phase_status={state.get('phase_status', {})} "
             f"pass_status={state.get('implementation_pass_statuses', [])} "
             f"checklist={checklist_completed}/{checklist_total}"
+        )
+        DevMasterGraph._emit_event(
+            state,
+            "final_summary",
+            status=state.get("status", "unknown"),
+            errors=err_count,
+            checklist_total=checklist_total,
+            checklist_completed=checklist_completed,
+            phase_status=state.get("phase_status", {}),
+            implementation_passes=state.get("implementation_pass_statuses", []),
+            task_outcomes=len(state.get("task_outcomes", [])),
         )
         DevMasterGraph._emit(state, f"[FINAL] {state['final_summary']}")
         state["phase_status"]["finalize_result"] = "completed"

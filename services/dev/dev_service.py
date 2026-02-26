@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from typing import Any, Callable, Dict, Optional
@@ -38,8 +39,9 @@ class DevService:
             log_sink("[DEV] starting graph run...")
         if llm_corrector is None:
             llm_corrector = self._default_llm_corrector
+        effective_request_id = request_id or str(uuid.uuid4())
         final_state = self.graph.run(
-            request_id=request_id or str(uuid.uuid4()),
+            request_id=effective_request_id,
             plan=plan,
             scope_root=self.scope_root,
             ask_user=ask_user,
@@ -52,6 +54,7 @@ class DevService:
             ),
             log_sink=log_sink,
         )
+        self._persist_run_artifacts(final_state, effective_request_id)
 
         logs = final_state.get("logs", [])
         errors = final_state.get("errors", [])
@@ -80,6 +83,36 @@ class DevService:
             "build_logs": build_logs,
             "status": str(final_state.get("status", "unknown")),
         }
+
+    def _persist_run_artifacts(self, final_state: Dict[str, Any], request_id: str) -> None:
+        repo_root = os.path.dirname(self.scope_root.rstrip(os.sep))
+        run_dir = os.path.join(repo_root, ".orchestrator", "runs", request_id)
+        os.makedirs(run_dir, exist_ok=True)
+        events = final_state.get("telemetry_events", [])
+        outcomes = final_state.get("task_outcomes", [])
+        summary = {
+            "request_id": request_id,
+            "status": final_state.get("status", "unknown"),
+            "phase_status": final_state.get("phase_status", {}),
+            "errors_count": len(final_state.get("errors", [])),
+            "errors": final_state.get("errors", []),
+            "checklist_cursor": final_state.get("checklist_cursor", ""),
+            "checklist_items": final_state.get("internal_checklist", []),
+            "final_summary": final_state.get("final_summary", ""),
+        }
+        try:
+            with open(os.path.join(run_dir, "events.jsonl"), "w", encoding="utf-8") as fh:
+                for event in events if isinstance(events, list) else []:
+                    if not isinstance(event, dict):
+                        continue
+                    fh.write(json.dumps(event, sort_keys=True) + "\n")
+            with open(os.path.join(run_dir, "task_outcomes.json"), "w", encoding="utf-8") as fh:
+                json.dump(outcomes if isinstance(outcomes, list) else [], fh, indent=2)
+            with open(os.path.join(run_dir, "summary.json"), "w", encoding="utf-8") as fh:
+                json.dump(summary, fh, indent=2)
+        except Exception:
+            # Artifact persistence should never fail the execution path.
+            pass
 
     @staticmethod
     def _default_llm_corrector(payload: Dict[str, Any]) -> str:

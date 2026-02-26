@@ -258,6 +258,28 @@ class DevExecutorTests(unittest.TestCase):
             self.assertEqual(outcomes[0].get("run_mode"), "service_smoke")
             self.assertTrue(bool(outcomes[0].get("evidence", {}).get("smoke_ready")), msg=str(outcomes))
 
+    def test_emits_structured_events_to_event_sink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            events: list[dict] = []
+            tasks = [
+                DevTask(
+                    id="t11",
+                    description="event sink coverage",
+                    command="python -c \"print('ok')\"",
+                    cwd=".",
+                )
+            ]
+            _, _, errors, _, _, _ = execute_dev_tasks(
+                tasks,
+                scope_root=tmp,
+                event_sink=events.append,
+            )
+            self.assertEqual(errors, [], msg=str(errors))
+            categories = {str(event.get("category", "")) for event in events}
+            self.assertIn("command_provenance", categories)
+            self.assertIn("run_attempt", categories)
+            self.assertIn("task_outcome", categories)
+
 
 if __name__ == "__main__":
     unittest.main()
