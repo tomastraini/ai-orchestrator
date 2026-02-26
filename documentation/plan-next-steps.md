@@ -82,6 +82,7 @@ For this roadmap, "~70% Cursor-like" means:
   - assumptions and confidence
   - previous correction attempts
   - known constraints discovered at runtime
+  - it can explore many files, search folders at the same time for increased performance and speed.
 
 ### Success criteria
 
