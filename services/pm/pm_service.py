@@ -260,8 +260,10 @@ Wrapper format:
       "backend_required": "yes|no",
       "database_required": "yes|no"
     }},
-    "bootstrap_commands": [{{"cwd": "string", "command": "string", "purpose": "string"}}],
+    "bootstrap_commands": [],  // PM must keep this empty; DEV owns executable commands
     "target_files": [{{"file_name": "string", "expected_path_hint": "string", "modification_type": "string", "details": "string", "creation_policy": "must_exist|create_if_missing"}}],
+    "target_intents": [{{"path_hint": "string", "file_role": "string", "change_type": "string", "path_priority": 1, "confidence": 0.0, "rationale": "string"}}],
+    "repo_structure_snapshot": {{"top_level": ["string"], "projects": ["string"]}},
     "constraints": ["string"],
     "validation": ["string"],
     "clarification_summary": ["string"],
@@ -279,6 +281,7 @@ Wrapper format:
 
 Rules:
 - {force_line}
+- PM must not emit executable command content. `bootstrap_commands` must be [].
 - If status=needs_clarification => provide exactly one concrete question and plan must be null.
 - If status=final_plan => question must be empty.
 - No extra keys.
@@ -477,6 +480,31 @@ def create_plan(
                 "Search repository for related symbols before editing",
                 "Rank candidate files by likelihood of relevance to requirement",
             ]
+        # PM/Dev boundary: PM provides intent metadata, never executable commands.
+        plan["bootstrap_commands"] = []
+        if "target_intents" not in plan or not isinstance(plan.get("target_intents"), list):
+            target_intents: List[Dict[str, Any]] = []
+            for idx, target in enumerate(plan.get("target_files", []), start=1):
+                if not isinstance(target, dict):
+                    continue
+                target_intents.append(
+                    {
+                        "path_hint": str(target.get("expected_path_hint", "")),
+                        "file_role": str(target.get("file_name", "")).split(".")[-1] or "source",
+                        "change_type": str(target.get("modification_type", "modify")),
+                        "path_priority": idx,
+                        "confidence": 0.6,
+                        "rationale": str(target.get("details", "")),
+                    }
+                )
+            plan["target_intents"] = target_intents
+        if "repo_structure_snapshot" not in plan or not isinstance(plan.get("repo_structure_snapshot"), dict):
+            projects_list = workspace_context.get("projects", [])
+            top_level = workspace_context.get("top_level_entries", [])
+            plan["repo_structure_snapshot"] = {
+                "top_level": [str(x) for x in top_level[:30]],
+                "projects": [str(x) for x in projects_list[:60]],
+            }
         if "product_contract" not in plan or not isinstance(plan.get("product_contract"), dict):
             plan["product_contract"] = {
                 "goals": [f"Deliver requested outcome: {requirement.strip()}"],

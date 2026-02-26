@@ -16,7 +16,9 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
     implementation_targets: List[Dict[str, str]] = []
 
     handoff_steps = handoff.get("execution_steps")
-    if isinstance(handoff_steps, list) and len(handoff_steps) > 0:
+    execution_origin = str(handoff.get("execution_origin", "")).strip().lower()
+    use_handoff_steps = bool(isinstance(handoff_steps, list) and len(handoff_steps) > 0 and execution_origin == "dev")
+    if use_handoff_steps:
         for i, cmd in enumerate(handoff_steps, start=1):
             if isinstance(cmd, dict):
                 bootstrap_tasks.append(
@@ -28,6 +30,8 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
                         kind="bootstrap",
                     )
                 )
+    elif isinstance(handoff_steps, list) and len(handoff_steps) > 0:
+        graph_cls._emit(state, "[TODO] ignoring PM-authored execution_steps; DEV will infer bootstrap commands")
     else:
         for i, cmd in enumerate(plan.get("bootstrap_commands", []), start=1):
             if isinstance(cmd, dict):
@@ -40,6 +44,10 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
                         kind="bootstrap",
                     )
                 )
+    if not bootstrap_tasks and hasattr(graph_cls, "_infer_bootstrap_tasks_from_intent"):
+        inferred = graph_cls._infer_bootstrap_tasks_from_intent(state)
+        if isinstance(inferred, list):
+            bootstrap_tasks.extend([task for task in inferred if isinstance(task, DevTask)])
 
     for i, validation in enumerate(plan.get("validation", []), start=1):
         if isinstance(validation, str):

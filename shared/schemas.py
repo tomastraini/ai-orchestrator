@@ -23,6 +23,8 @@ ALLOWED_TOP_LEVEL_KEYS = {
     "technical_preferences",
     "review_guidelines",
     "discovery_hints",
+    "target_intents",
+    "repo_structure_snapshot",
 }
 REQUIRED_TOP_LEVEL_KEYS = set(ALLOWED_TOP_LEVEL_KEYS)
 REQUIRED_TOP_LEVEL_KEYS.remove("product_contract")
@@ -30,6 +32,8 @@ REQUIRED_TOP_LEVEL_KEYS.remove("ambiguities")
 REQUIRED_TOP_LEVEL_KEYS.remove("technical_preferences")
 REQUIRED_TOP_LEVEL_KEYS.remove("review_guidelines")
 REQUIRED_TOP_LEVEL_KEYS.remove("discovery_hints")
+REQUIRED_TOP_LEVEL_KEYS.remove("target_intents")
+REQUIRED_TOP_LEVEL_KEYS.remove("repo_structure_snapshot")
 ALLOWED_TARGET_FILE_KEYS = {
     "file_name",
     "expected_path_hint",
@@ -45,6 +49,14 @@ ALLOWED_PROJECT_REF_KEYS = {"name", "path_hint"}
 ALLOWED_STACK_KEYS = {"frontend", "backend", "language_preferences"}
 ALLOWED_BOOTSTRAP_COMMAND_KEYS = {"cwd", "command", "purpose"}
 ALLOWED_PM_CHECKLIST_KEYS = {"project_scope", "architecture", "backend_required", "database_required"}
+ALLOWED_TARGET_INTENT_KEYS = {
+    "path_hint",
+    "file_role",
+    "change_type",
+    "path_priority",
+    "confidence",
+    "rationale",
+}
 
 
 def _is_non_empty_str(x: Any) -> bool:
@@ -327,5 +339,41 @@ def validate_plan_json(plan: Any, requirement: Optional[str] = None) -> Tuple[bo
     discovery_hints = plan.get("discovery_hints")
     if discovery_hints is not None:
         errors.extend(_require_list_of_non_empty_strings(discovery_hints, "discovery_hints", allow_empty=True))
+
+    target_intents = plan.get("target_intents")
+    if target_intents is not None:
+        if not isinstance(target_intents, list):
+            errors.append("Field 'target_intents' must be an array when provided.")
+        else:
+            for i, intent in enumerate(target_intents):
+                if not isinstance(intent, dict):
+                    errors.append(f"target_intents[{i}] must be an object.")
+                    continue
+                errors.extend(_validate_no_unknown_keys(intent, ALLOWED_TARGET_INTENT_KEYS, f"target_intents[{i}]"))
+                for required_key in ["path_hint", "file_role", "change_type"]:
+                    if not _is_non_empty_str(intent.get(required_key)):
+                        errors.append(f"target_intents[{i}].{required_key} must be a non-empty string.")
+                path_priority = intent.get("path_priority")
+                if path_priority is not None:
+                    try:
+                        priority_num = int(path_priority)
+                    except Exception:
+                        errors.append(f"target_intents[{i}].path_priority must be integer when provided.")
+                    else:
+                        if priority_num < 1:
+                            errors.append(f"target_intents[{i}].path_priority must be >= 1.")
+                confidence = intent.get("confidence")
+                if confidence is not None:
+                    try:
+                        confidence_num = float(confidence)
+                    except Exception:
+                        errors.append(f"target_intents[{i}].confidence must be numeric when provided.")
+                    else:
+                        if confidence_num < 0.0 or confidence_num > 1.0:
+                            errors.append(f"target_intents[{i}].confidence must be within [0, 1].")
+
+    repo_structure_snapshot = plan.get("repo_structure_snapshot")
+    if repo_structure_snapshot is not None and not isinstance(repo_structure_snapshot, dict):
+        errors.append("Field 'repo_structure_snapshot' must be an object when provided.")
 
     return (len(errors) == 0), errors

@@ -165,7 +165,7 @@ class PMMandatoryChecklistTests(unittest.TestCase):
         finally:
             pm_service._request_model_decision = original
 
-        self.assertEqual(plan["bootstrap_commands"][0]["cwd"], "projects")
+        self.assertEqual(plan["bootstrap_commands"], [])
 
 
 if __name__ == "__main__":

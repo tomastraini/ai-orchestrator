@@ -426,6 +426,188 @@ class DevMasterGraph:
         return True
 
     @staticmethod
+    def _infer_bootstrap_tasks_from_intent(state: DevGraphState) -> List[DevTask]:
+        plan = state.get("plan", {}) if isinstance(state.get("plan"), dict) else {}
+        if not isinstance(plan.get("target_intents"), list):
+            # Backward-compatible guard: only infer when PM provides intent metadata.
+            return []
+        project_mode = str(plan.get("project_mode", "")).strip().lower()
+        if project_mode != "new_project":
+            return []
+        project_root = str(state.get("project_root", f"projects/{state.get('project_name', 'project')}"))
+        project_name = str(state.get("project_name", "project")).strip() or "project"
+        stack = plan.get("stack", {}) if isinstance(plan.get("stack"), dict) else {}
+        frontend = str(stack.get("frontend", "")).lower()
+        backend = str(stack.get("backend", "")).lower()
+        lang_prefs = " ".join([str(x).lower() for x in stack.get("language_preferences", []) if isinstance(x, str)])
+        stack_hint = " ".join([frontend, backend, lang_prefs]).strip()
+
+        tasks: List[DevTask] = []
+        if any(tok in stack_hint for tok in ["react", "vite", "typescript", "javascript", "node"]):
+            tasks.append(
+                DevTask(
+                    id="bootstrap_inferred_1",
+                    description="infer scaffold command from PM intent",
+                    command=f"npm create vite@latest {project_name} -- --template react-ts",
+                    cwd="projects",
+                    kind="bootstrap",
+                )
+            )
+            tasks.append(
+                DevTask(
+                    id="bootstrap_inferred_2",
+                    description="install dependencies in project root",
+                    command="npm install",
+                    cwd=project_root,
+                    kind="bootstrap",
+                )
+            )
+            return tasks
+        if any(tok in stack_hint for tok in ["python", "django", "flask", "fastapi"]):
+            tasks.append(
+                DevTask(
+                    id="bootstrap_inferred_1",
+                    description="ensure python project root exists",
+                    command="python -c \"print('bootstrap ready')\"",
+                    cwd=project_root,
+                    kind="bootstrap",
+                )
+            )
+        return tasks
+
+    @staticmethod
+    def _bootstrap_artifact_gate(state: DevGraphState, *, task: DevTask) -> Tuple[bool, Dict[str, Any]]:
+        active_root = str(state.get("active_project_root", "")).strip()
+        if not active_root:
+            project_root = str(state.get("project_root", ""))
+            rel = project_root.split("/", 1)[1] if project_root.startswith("projects/") else project_root
+            active_root = os.path.join(state.get("scope_root", ""), rel)
+        marker_files = [
+            "package.json",
+            "pyproject.toml",
+            "requirements.txt",
+            "Gemfile",
+            "go.mod",
+            "Cargo.toml",
+            "pom.xml",
+        ]
+        present_markers = [name for name in marker_files if os.path.exists(os.path.join(active_root, name))]
+        command = str(task.command or "").lower()
+        stdout_blob = "\n".join(
+            [str(x.get("stdout_excerpt", "")) for x in state.get("task_outcomes", []) if isinstance(x, dict) and x.get("task_id") == task.id]
+        ).lower()
+        cancellation_signatures = ["operation cancelled", "operation canceled", "aborted", "cancelled"]
+        cancelled = any(sig in stdout_blob for sig in cancellation_signatures)
+        is_scaffold_like = any(tok in command for tok in [" create ", " create-", " init ", " new "])
+        if cancelled:
+            return False, {"reason": "cancellation_signature_detected", "task_id": task.id}
+        if is_scaffold_like and not present_markers:
+            return False, {
+                "reason": "bootstrap_incomplete",
+                "task_id": task.id,
+                "active_root": DevMasterGraph._relpath_safe(state, active_root),
+                "markers_found": present_markers,
+            }
+        return True, {
+            "task_id": task.id,
+            "active_root": DevMasterGraph._relpath_safe(state, active_root),
+            "markers_found": present_markers,
+        }
+
+    @staticmethod
+    def _recovery_satisfies_task_intent(task_kind: str, failed_command: str, recovered_command: str) -> bool:
+        failed = str(failed_command or "").lower()
+        recovered = str(recovered_command or "").lower()
+        if not recovered:
+            return False
+        if any(tok in failed for tok in ["install", "npm i", "pnpm i", "yarn install"]) and not any(
+            tok in recovered for tok in ["install", "npm i", "pnpm i", "yarn install"]
+        ):
+            return False
+        if any(tok in failed for tok in ["create", "init", "scaffold", "new"]) and not any(
+            tok in recovered for tok in ["create", "init", "scaffold", "new"]
+        ):
+            return False
+        if task_kind == "bootstrap" and any(tok in recovered for tok in ["find ", "ls ", "dir ", "rg ", "where "]):
+            return False
+        return True
+
+    @staticmethod
+    def _terminal_failure_gate(state: DevGraphState) -> Dict[str, Any]:
+        errors_blob = "\n".join([str(x) for x in state.get("errors", [])]).lower()
+        attempts = [x for x in state.get("attempt_history", []) if isinstance(x, dict)]
+        signatures: Dict[str, int] = {}
+        for attempt in attempts:
+            key = f"{attempt.get('task_id','')}::{attempt.get('category','')}::{str(attempt.get('stderr',''))[:120]}"
+            signatures[key] = signatures.get(key, 0) + 1
+        repeated_no_progress = any(count >= 3 for count in signatures.values())
+        criteria = {
+            "integrity_compromised": any(
+                tok in errors_blob for tok in ["escapes scope", "policy violation", "unsafe", "blocked command"]
+            ),
+            "llm_budget_exhausted": "llm model-call budget reached" in errors_blob or "llm budget" in errors_blob,
+            "no_progress_loop": repeated_no_progress,
+        }
+        approved = bool(criteria["integrity_compromised"] or criteria["llm_budget_exhausted"] or criteria["no_progress_loop"])
+        criterion = (
+            "integrity_compromised"
+            if criteria["integrity_compromised"]
+            else ("llm_budget_exhausted" if criteria["llm_budget_exhausted"] else ("no_progress_loop" if criteria["no_progress_loop"] else "none"))
+        )
+        return {"approved": approved, "criterion": criterion, "criteria": criteria, "attempt_signatures": signatures}
+
+    @staticmethod
+    def _persist_run_artifacts(state: DevGraphState) -> None:
+        scope_root = str(state.get("scope_root", ""))
+        request_id = str(state.get("request_id", "")).strip() or "unknown"
+        run_dir = os.path.join(scope_root, ".orchestrator", "runs", request_id)
+        os.makedirs(run_dir, exist_ok=True)
+        reasoning_path = os.path.join(run_dir, "dev_reasoning_checkpoints.json")
+        trace_path = os.path.join(run_dir, "dev_execution_trace.txt")
+        reasoning = {
+            "request_id": request_id,
+            "project_root": state.get("project_root", ""),
+            "active_project_root": state.get("active_project_root", ""),
+            "phase_status": state.get("phase_status", {}),
+            "technical_plan": state.get("dev_technical_plan", {}),
+            "checklist_cursor": state.get("checklist_cursor", ""),
+            "status": state.get("status", ""),
+            "errors": state.get("errors", []),
+        }
+        with open(reasoning_path, "w", encoding="utf-8") as fh:
+            json.dump(reasoning, fh, indent=2)
+        lines: List[str] = []
+        lines.append(f"request_id={request_id}")
+        lines.append(f"status={state.get('status','')}")
+        lines.append(f"project_root={state.get('project_root','')}")
+        lines.append(f"active_project_root={state.get('active_project_root','')}")
+        lines.append("")
+        lines.append("## Phase Status")
+        for key, value in (state.get("phase_status", {}) or {}).items():
+            lines.append(f"- {key}: {value}")
+        lines.append("")
+        lines.append("## Commands / Outcomes")
+        for outcome in [x for x in state.get("task_outcomes", []) if isinstance(x, dict)]:
+            lines.append(
+                f"- task={outcome.get('task_id')} status={outcome.get('status')} "
+                f"category={outcome.get('category')} cmd={outcome.get('command')}"
+            )
+        lines.append("")
+        lines.append("## Files Touched")
+        for path in [str(x) for x in state.get("touched_paths", []) if isinstance(x, str)]:
+            lines.append(f"- {DevMasterGraph._relpath_safe(state, path)}")
+        lines.append("")
+        lines.append("## Errors")
+        for err in [str(x) for x in state.get("errors", []) if isinstance(x, str)]:
+            lines.append(f"- {err}")
+        lines.append("")
+        lines.append("## Timeline Logs")
+        for entry in [str(x) for x in state.get("logs", []) if isinstance(x, str)]:
+            lines.append(entry)
+        with open(trace_path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+
+    @staticmethod
     def _build_internal_checklist(state: DevGraphState) -> None:
         handoff = state.get("handoff") or {}
         restored = handoff.get("internal_checklist")
@@ -1230,6 +1412,16 @@ class DevMasterGraph:
                 checklist_id = f"todo_{outcome.get('task_id', '')}"
                 status = "completed" if outcome.get("status") == "completed" else "blocked"
                 DevMasterGraph._set_checklist_status(state, checklist_id, status, evidence=outcome)
+            if outcomes and all(str(o.get("status")) == "completed" for o in outcomes):
+                gate_ok, gate_evidence = DevMasterGraph._bootstrap_artifact_gate(state, task=task)
+                DevMasterGraph._emit_event(
+                    state,
+                    "bootstrap_artifact_gate_pass" if gate_ok else "bootstrap_artifact_gate_fail",
+                    task_id=task.id,
+                    evidence=gate_evidence,
+                )
+                if not gate_ok:
+                    task_errors.append(f"[BOOTSTRAP_INCOMPLETE] {gate_evidence.get('reason', 'artifact_gate_failed')}")
             # Mandatory per-handoff re-scan/re-index.
             root_evidence = DevMasterGraph._resolve_active_project_root_after_bootstrap(
                 state=state,
@@ -1272,10 +1464,19 @@ class DevMasterGraph:
                 state["errors"].append(timeout_note)
                 DevMasterGraph._emit(state, timeout_note)
             state["errors"].extend(errors)
-            state["status"] = "bootstrap_failed"
-            state["bootstrap_status"] = "failed"
+            hard_failure = any("[FAIL]" in str(err) for err in errors) and not any(
+                "BOOTSTRAP_INCOMPLETE" in str(err) for err in errors
+            )
+            state["bootstrap_status"] = "failed" if hard_failure else "blocked"
             state["last_error"] = errors[-1]
             state["phase_status"]["execute_bootstrap_phase"] = "failed"
+            DevMasterGraph._emit_event(
+                state,
+                "terminal_failure_gate_rejected",
+                phase="bootstrap",
+                reason="recoverable_bootstrap_failure",
+                errors=errors[-3:],
+            )
             return state
 
         if pending_llm_task is None:
@@ -1317,8 +1518,7 @@ class DevMasterGraph:
                     return state
             elif confidence < 45 and not trusted_existing and not callable(state.get("ask_user")):
                 state["errors"].append("[ROOT] low confidence active root resolution without CLI clarification.")
-                state["status"] = "bootstrap_failed"
-                state["bootstrap_status"] = "failed"
+                state["bootstrap_status"] = "blocked"
                 state["last_error"] = state["errors"][-1]
                 state["phase_status"]["execute_bootstrap_phase"] = "failed"
                 return state
@@ -1339,8 +1539,7 @@ class DevMasterGraph:
             state["errors"].append(
                 f"{pending_llm_task['last_error']} (No LLM corrector available after deterministic retries.)"
             )
-            state["status"] = "bootstrap_failed"
-            state["bootstrap_status"] = "failed"
+            state["bootstrap_status"] = "blocked"
             state["last_error"] = state["errors"][-1]
             state["phase_status"]["execute_bootstrap_phase"] = "failed"
             return state
@@ -1394,10 +1593,29 @@ class DevMasterGraph:
             state["errors"].append(
                 f"{pending_llm_task['last_error']} (LLM did not provide corrected command.)"
             )
-            state["status"] = "bootstrap_failed"
-            state["bootstrap_status"] = "failed"
+            state["bootstrap_status"] = "blocked"
             state["last_error"] = state["errors"][-1]
             state["phase_status"]["execute_bootstrap_phase"] = "failed"
+            return state
+
+        if not DevMasterGraph._recovery_satisfies_task_intent(
+            str(pending_llm_task.get("task_kind", "")),
+            str(pending_llm_task.get("last_command", "")),
+            corrected_command,
+        ):
+            state["errors"].append(
+                f"[RECOVERY_INTENT_MISMATCH] task={pending_llm_task.get('task_id')} "
+                f"failed_command={pending_llm_task.get('last_command')} recovered_command={corrected_command}"
+            )
+            state["bootstrap_status"] = "blocked"
+            state["phase_status"]["execute_bootstrap_phase"] = "failed"
+            DevMasterGraph._emit_event(
+                state,
+                "recovery_intent_mismatch",
+                task_id=str(pending_llm_task.get("task_id", "")),
+                failed_command=str(pending_llm_task.get("last_command", "")),
+                recovered_command=corrected_command,
+            )
             return state
 
         DevMasterGraph._emit(state, f"[LLM_REWRITE] {pending_llm_task['task_id']} -> {corrected_command}")
@@ -1428,8 +1646,7 @@ class DevMasterGraph:
                 evidence={"phase": "bootstrap", "error": recover_error},
             )
             state["errors"].append(recover_error)
-            state["status"] = "bootstrap_failed"
-            state["bootstrap_status"] = "failed"
+            state["bootstrap_status"] = "blocked"
             state["last_error"] = recover_error
             state["phase_status"]["execute_bootstrap_phase"] = "failed"
             return state
@@ -2054,6 +2271,7 @@ class DevMasterGraph:
             DevMasterGraph._emit(state, "[IMPLEMENTATION] no pending implementation checklist items")
             return state
         total_actions = 0
+        failed_target_ids: List[str] = []
         try:
             for pass_index in (1, 2):
                 pass_label = f"implementation_pass_{pass_index}"
@@ -2068,18 +2286,42 @@ class DevMasterGraph:
                         state,
                         category="implementation_index_refresh",
                     )
-                    action, _resolved_target = execute_implementation_target(
-                        state=state,
-                        graph_cls=DevMasterGraph,
-                        idx=idx,
-                        target=target,
-                        pass_index=pass_index,
-                        scope_root=scope_root,
-                        project_root=project_root,
-                        active_root=active_root,
-                        file_index=file_index,
-                        target_proofs=target_proofs,
-                    )
+                    try:
+                        action, _resolved_target = execute_implementation_target(
+                            state=state,
+                            graph_cls=DevMasterGraph,
+                            idx=idx,
+                            target=target,
+                            pass_index=pass_index,
+                            scope_root=scope_root,
+                            project_root=project_root,
+                            active_root=active_root,
+                            file_index=file_index,
+                            target_proofs=target_proofs,
+                        )
+                    except Exception as target_error:
+                        item_id = f"todo_impl_{idx}"
+                        if item_id not in failed_target_ids:
+                            failed_target_ids.append(item_id)
+                        state["errors"].append(f"[IMPLEMENTATION_TARGET_ERROR] {item_id}: {target_error}")
+                        DevMasterGraph._set_checklist_status(
+                            state,
+                            item_id,
+                            "failed",
+                            evidence={
+                                "phase": "implementation",
+                                "pass_index": pass_index,
+                                "error": str(target_error),
+                            },
+                        )
+                        DevMasterGraph._emit_event(
+                            state,
+                            "implementation_target_failed",
+                            target_id=item_id,
+                            pass_index=pass_index,
+                            error=str(target_error),
+                        )
+                        continue
                     DevMasterGraph._refresh_active_root_index(
                         state,
                         category="post_file_mutation_index_refresh",
@@ -2102,6 +2344,8 @@ class DevMasterGraph:
                 )
             for idx, target in pending_targets:
                 key = f"todo_impl_{idx}"
+                if key in failed_target_ids:
+                    continue
                 proof = target_proofs.get(key, {})
                 before_hash = str(proof.get("before_hash", ""))
                 after_hash = str(proof.get("after_hash", ""))
@@ -2170,19 +2414,18 @@ class DevMasterGraph:
                     "phase": "implementation",
                 },
             )
-            for idx, _target in pending_targets:
-                DevMasterGraph._set_checklist_status(
-                    state,
-                    f"todo_impl_{idx}",
-                    "failed",
-                    evidence={"phase": "implementation", "error": str(e)},
-                )
-            state["implementation_status"] = "failed"
-            state["status"] = "implementation_failed"
+            state["implementation_status"] = "blocked"
             state["phase_status"]["execute_implementation_phase"] = "failed"
             return state
 
-        state["implementation_status"] = "completed"
+        pending_or_failed = [
+            item
+            for item in state.get("internal_checklist", [])
+            if isinstance(item, dict)
+            and str(item.get("kind", "")) == "implementation"
+            and str(item.get("status", "")) != "completed"
+        ]
+        state["implementation_status"] = "completed" if not pending_or_failed else "partial_progress"
         state["phase_status"]["execute_implementation_phase"] = "completed"
         DevMasterGraph._emit(state, f"[IMPLEMENTATION_SUMMARY] total_actions={total_actions}")
         return state
@@ -2329,7 +2572,6 @@ class DevMasterGraph:
                     f"targeted fix candidates={error_file_refs[:8]}"
                 )
             state["validation_status"] = "failed"
-            state["status"] = "implementation_failed"
             state["phase_status"]["execute_validation_phase"] = "failed"
             DevMasterGraph._emit(state, "[VALIDATION] failed")
             return state
@@ -2394,7 +2636,6 @@ class DevMasterGraph:
             else:
                 state["errors"].append("[FINAL_COMPILE] no terminating compile/build command inferred.")
                 state["final_compile_status"] = "failed"
-                state["status"] = "implementation_failed"
                 state["phase_status"]["execute_final_compile_gate"] = "failed"
                 return state
 
@@ -2543,7 +2784,6 @@ class DevMasterGraph:
                 )
             state["errors"].extend(errors)
             state["final_compile_status"] = "failed"
-            state["status"] = "implementation_failed"
             state["phase_status"]["execute_final_compile_gate"] = "failed"
             DevMasterGraph._emit(state, "[FINAL_COMPILE] failed")
             return state
@@ -2589,19 +2829,43 @@ class DevMasterGraph:
             if cmd:
                 DevMasterGraph._remember_text_value(state, "attempted_commands", cmd)
         memory = DevMasterGraph._ensure_repository_memory(state)
-        if state.get("status") in {"bootstrap_failed", "implementation_failed"}:
-            pass
-        elif state.get("implementation_status") == "impl_skipped":
+        if state.get("bootstrap_status") == "failed":
             state["status"] = "bootstrap_failed"
+        elif state.get("implementation_status") == "impl_skipped":
+            state["status"] = "recoverable_blocked"
         elif state.get("validation_status") not in {"completed", "skipped"}:
-            state["status"] = "implementation_failed"
+            state["status"] = "recoverable_blocked"
         elif state.get("final_compile_status") != "completed":
-            state["status"] = "implementation_failed"
+            state["status"] = "partial_progress"
         elif not DevMasterGraph._all_mandatory_checklist_items_completed(state):
-            state["status"] = "implementation_failed"
+            state["status"] = "partial_progress"
             state["errors"].append("[CHECKLIST] mandatory items remain incomplete.")
         else:
             state["status"] = "completed"
+
+        terminal_gate = DevMasterGraph._terminal_failure_gate(state)
+        DevMasterGraph._emit_event(
+            state,
+            "terminal_failure_gate_entered",
+            status_before=state.get("status", ""),
+            gate=terminal_gate,
+        )
+        if state.get("status") not in {"completed", "bootstrap_failed"}:
+            if bool(terminal_gate.get("approved", False)):
+                state["status"] = "implementation_failed"
+                DevMasterGraph._emit_event(
+                    state,
+                    "terminal_failure_gate_approved",
+                    criterion=terminal_gate.get("criterion", "none"),
+                    gate=terminal_gate,
+                )
+            else:
+                DevMasterGraph._emit_event(
+                    state,
+                    "terminal_failure_gate_rejected",
+                    criterion=terminal_gate.get("criterion", "none"),
+                    gate=terminal_gate,
+                )
         err_count = len(state.get("errors", []))
         checklist_total = len(state.get("internal_checklist", []))
         checklist_completed = len(
@@ -2636,6 +2900,11 @@ class DevMasterGraph:
             path = str(item.get("data", {}).get("candidate_path", "")).replace("\\", "/").strip().casefold()
             if path and path in rejected_paths:
                 repeated_retry_count += 1
+        bootstrap_outcomes = [
+            o
+            for o in outcomes
+            if str(o.get("task_id", "")).startswith("bootstrap_") or str(o.get("task_id", "")).startswith("handoff_")
+        ]
         reliability_metrics = {
             "target_selection_precision": (
                 max(0.0, 1.0 - (len(candidate_rejections) / max(1, len(candidate_attempts))))
@@ -2666,6 +2935,44 @@ class DevMasterGraph:
             ),
             "implementation_failed": 1.0 if state.get("status") == "implementation_failed" else 0.0,
             "task_failure_rate": len(failed_outcomes) / max(1, len(outcomes)),
+            "bootstrap_true_success_rate": (
+                sum(1 for o in bootstrap_outcomes if str(o.get("status", "")) == "completed") / max(1, len(bootstrap_outcomes))
+                if bootstrap_outcomes
+                else 1.0
+            ),
+            "semantic_recovery_acceptance_rate": (
+                sum(
+                    1
+                    for event in state.get("telemetry_events", [])
+                    if isinstance(event, dict) and str(event.get("category", "")) == "final_compile_recovery_started"
+                )
+                / max(
+                    1,
+                    sum(
+                        1
+                        for event in state.get("telemetry_events", [])
+                        if isinstance(event, dict)
+                        and str(event.get("category", "")) in {"recovery_intent_mismatch", "final_compile_recovery_started"}
+                    ),
+                )
+            ),
+            "implementation_cascade_failure_rate": (
+                sum(
+                    1
+                    for item in state.get("internal_checklist", [])
+                    if isinstance(item, dict)
+                    and str(item.get("kind", "")) == "implementation"
+                    and str(item.get("status", "")) == "failed"
+                )
+                / max(
+                    1,
+                    sum(
+                        1
+                        for item in state.get("internal_checklist", [])
+                        if isinstance(item, dict) and str(item.get("kind", "")) == "implementation"
+                    ),
+                )
+            ),
         }
         state["reliability_metrics"] = reliability_metrics
         DevMasterGraph._emit_event(
@@ -2681,5 +2988,6 @@ class DevMasterGraph:
             reliability_metrics=reliability_metrics,
         )
         DevMasterGraph._emit(state, f"[FINAL] {state['final_summary']}")
+        DevMasterGraph._persist_run_artifacts(state)
         state["phase_status"]["finalize_result"] = "completed"
         return state

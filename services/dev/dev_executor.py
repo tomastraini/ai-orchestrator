@@ -152,6 +152,8 @@ def _is_likely_long_running_command(command: str) -> bool:
 
 def classify_failure(stdout: str, stderr: str, exit_code: int) -> str:
     text = f"{stdout}\n{stderr}".lower()
+    if "operation cancelled" in text or "operation canceled" in text or "aborted" in text:
+        return "operation_cancelled"
     if "ok to proceed?" in text or "npm error canceled" in text or "prompt" in text:
         return "interactive_prompt"
     if "not recognized as an internal or external command" in text or "command not found" in text:
@@ -174,14 +176,21 @@ def classify_failure(stdout: str, stderr: str, exit_code: int) -> str:
         return "test_failure"
     if "config" in text or "tsconfig" in text or "package.json" in text or "pyproject" in text:
         return "config_error"
-    if "package manager" in text or "npm" in text or "yarn" in text or "pnpm" in text:
+    if exit_code != 0 and any(tok in text for tok in ["package manager mismatch", "unsupported package manager", "unknown package manager"]):
         return "package_manager_mismatch"
     if exit_code != 0:
         return "unknown"
     return "none"
 
 
-def rewrite_command_deterministic(command: str, category: str, stack_hint: str = "generic") -> str:
+def rewrite_command_deterministic(
+    command: str,
+    category: str,
+    stack_hint: str = "generic",
+    *,
+    scope_root: str = "",
+    cwd: str = "",
+) -> str:
     cmd = command.strip()
     low = cmd.lower()
 
@@ -204,6 +213,11 @@ def rewrite_command_deterministic(command: str, category: str, stack_hint: str =
         cwd_norm = cwd_hint.strip().replace("\\", "/").lstrip("./")
         if not target.startswith("projects/"):
             return token
+        # If cwd is projects root, keep child path (projects/foo -> foo), never collapse to "."
+        if cwd_norm.endswith("/projects"):
+            return target.split("/", 1)[1] if "/" in target else target
+        if cwd_norm == "projects":
+            return target.split("/", 1)[1] if "/" in target else target
         if cwd_norm in {"", "."}:
             return "."
         if target == cwd_norm:
@@ -213,10 +227,17 @@ def rewrite_command_deterministic(command: str, category: str, stack_hint: str =
         return token
 
     # Keep deterministic rewrites generic in v2 (no framework-specific mutation).
+    scope_abs = _normalize_scope_path(scope_root) if scope_root else ""
+    cwd_rel = ""
+    if cwd and scope_abs:
+        try:
+            cwd_rel = os.path.relpath(_normalize_scope_path(cwd), scope_abs).replace("\\", "/")
+        except Exception:
+            cwd_rel = ""
     parts = cmd.split()
     for i, tok in enumerate(parts):
         if tok.strip().replace("\\", "/").lstrip("./").startswith("projects/"):
-            parts[i] = _normalize_projects_target_token(parts[i], ".")
+            parts[i] = _normalize_projects_target_token(parts[i], cwd_rel or ".")
     cmd = " ".join(parts) if parts else cmd
     low = cmd.lower()
 
@@ -387,9 +408,14 @@ def _run_once(
             "run_mode": run_mode,
             "smoke_ready": smoke_ready,
         }
-        if exit_code == 0:
+        if exit_code == 0 and category in {"interactive_prompt", "package_manager_mismatch"}:
+            category = "none"
+            attempt["category"] = "none"
+        if exit_code == 0 and category == "none":
             _emit(logs, f"[DONE] {task_id} in {elapsed_ms}ms", log_sink)
             return logs, None, attempt
+        if exit_code == 0 and category != "none":
+            return logs, f"[FAIL] {task_id}: semantic failure category={category}", attempt
         return logs, f"[FAIL] {task_id}: exited with code {exit_code}", attempt
     except subprocess.TimeoutExpired:
         elapsed_ms = int((time.time() - started) * 1000)
@@ -590,7 +616,13 @@ def execute_dev_tasks(
                 break
 
             category = str(attempt.get("category", "unknown"))
-            rewritten = rewrite_command_deterministic(current_command, category, inferred_stack)
+            rewritten = rewrite_command_deterministic(
+                current_command,
+                category,
+                inferred_stack,
+                scope_root=scope_abs,
+                cwd=cwd,
+            )
             if rewritten == current_command:
                 # No deterministic fix left; exit deterministic loop.
                 _emit(

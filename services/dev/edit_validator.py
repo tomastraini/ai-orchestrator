@@ -59,14 +59,15 @@ def classify_target_class(path: str) -> str:
     leaf = os.path.basename(normalized)
     if leaf.startswith(".") or leaf in {"package.json", "pyproject.toml", "requirements.txt", "cargo.toml", "go.mod"}:
         return "config"
-    if any(token in leaf for token in ["main.", "index.", "program.cs", "app.py"]):
-        return "entrypoint"
-    if ".spec." in leaf or ".test." in leaf:
-        return "test"
+    # Prefer extension family first to avoid false "index.* => entrypoint" on templates.
     if any(token in leaf for token in [".html", ".htm", ".xml", ".tmpl", ".template"]):
         return "template"
     if any(token in leaf for token in [".css", ".scss", ".sass", ".less", ".styl"]):
         return "style"
+    if any(token in leaf for token in ["main.", "index.", "program.cs", "app.py"]):
+        return "entrypoint"
+    if ".spec." in leaf or ".test." in leaf:
+        return "test"
     if "module" in leaf:
         return "module"
     if "component" in leaf:

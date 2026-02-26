@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import List
 
 from services.dev.command_policy import detect_stack_from_command, normalize_command_for_stack, normalize_non_interactive
@@ -37,7 +38,14 @@ def classify_failure(stdout: str, stderr: str, exit_code: int) -> str:
     return "none"
 
 
-def rewrite_command_deterministic(command: str, category: str, stack_hint: str = "generic") -> str:
+def rewrite_command_deterministic(
+    command: str,
+    category: str,
+    stack_hint: str = "generic",
+    *,
+    scope_root: str = "",
+    cwd: str = "",
+) -> str:
     cmd = command.strip()
     low = cmd.lower()
 
@@ -59,6 +67,8 @@ def rewrite_command_deterministic(command: str, category: str, stack_hint: str =
         cwd_norm = cwd_hint.strip().replace("\\", "/").lstrip("./")
         if not target.startswith("projects/"):
             return token
+        if cwd_norm.endswith("/projects") or cwd_norm == "projects":
+            return target.split("/", 1)[1] if "/" in target else target
         if cwd_norm in {"", "."}:
             return "."
         if target == cwd_norm:
@@ -67,12 +77,20 @@ def rewrite_command_deterministic(command: str, category: str, stack_hint: str =
             return target[len(cwd_norm) + 1 :] or "."
         return token
 
+    scope_abs = os.path.abspath(os.path.normpath(scope_root)) if scope_root else ""
+    cwd_rel = ""
+    if cwd and scope_abs:
+        try:
+            cwd_rel = os.path.relpath(os.path.abspath(os.path.normpath(cwd)), scope_abs).replace("\\", "/")
+        except Exception:
+            cwd_rel = ""
+
     if "create-react-app" in low:
         parts = cmd.split()
         try:
             idx = next(i for i, tok in enumerate(parts) if "create-react-app" in tok.lower())
             if len(parts) > idx + 1:
-                parts[idx + 1] = _normalize_projects_target_token(parts[idx + 1], ".")
+                parts[idx + 1] = _normalize_projects_target_token(parts[idx + 1], cwd_rel or ".")
                 cmd = " ".join(parts)
                 low = cmd.lower()
         except StopIteration:
@@ -99,7 +117,7 @@ def rewrite_command_deterministic(command: str, category: str, stack_hint: str =
                         target_idx = i + 2
                         break
         if target_idx >= 0:
-            parts[target_idx] = _normalize_projects_target_token(parts[target_idx], ".")
+            parts[target_idx] = _normalize_projects_target_token(parts[target_idx], cwd_rel or ".")
             cmd = " ".join(parts)
         return normalize_command_for_stack(normalize_non_interactive(cmd), stack_hint)
 

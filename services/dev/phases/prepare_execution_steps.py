@@ -60,6 +60,26 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
     else:
         state["dev_plan_approved"] = True
         graph_cls._emit(state, "[DEV_PLAN] no CLI callback provided; auto-approved in non-interactive mode")
+    try:
+        request_id = str(state.get("request_id", "")).strip() or "unknown"
+        run_dir = os.path.join(state["scope_root"], ".orchestrator", "runs", request_id)
+        os.makedirs(run_dir, exist_ok=True)
+        reasoning_path = os.path.join(run_dir, "dev_reasoning_prehandoff.json")
+        payload = {
+            "request_id": request_id,
+            "project_root": state.get("project_root", ""),
+            "active_project_root": state.get("active_project_root", ""),
+            "technical_plan": technical_plan,
+            "constraints": state.get("plan", {}).get("constraints", []),
+            "validation": state.get("plan", {}).get("validation", []),
+        }
+        with open(reasoning_path, "w", encoding="utf-8") as fh:
+            import json
+
+            json.dump(payload, fh, indent=2)
+        graph_cls._emit(state, f"[DEV_PLAN] persisted prehandoff reasoning to {reasoning_path}")
+    except Exception as e:
+        graph_cls._emit(state, f"[DEV_PLAN] warning: failed to persist prehandoff reasoning: {e}")
     state["phase_status"]["prepare_execution_steps"] = "completed"
     return state
 

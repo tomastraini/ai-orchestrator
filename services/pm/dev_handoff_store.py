@@ -206,6 +206,17 @@ def build_dev_handoff(
         "selected_project_root": project_root,
         "structure_plan": structure_plan,
         "execution_steps": execution_steps,
+        "execution_origin": "pm",
+        "target_intents": [
+            dict(intent)
+            for intent in plan.get("target_intents", [])
+            if isinstance(intent, dict)
+        ],
+        "repo_structure_snapshot": (
+            dict(plan.get("repo_structure_snapshot", {}))
+            if isinstance(plan.get("repo_structure_snapshot"), dict)
+            else {}
+        ),
         "pm_checklist": plan.get("pm_checklist", {}),
         "constraints": [str(x) for x in plan.get("constraints", [])],
         "validation": [str(x) for x in plan.get("validation", [])],
