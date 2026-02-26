@@ -197,7 +197,7 @@ class DevMasterGraph:
             "carry_forward_memory": bool(continuation_handoff.get("carry_forward_memory", True)),
             "continuation_eligible": False,
             "ready_for_followup": False,
-            "continuation_mode": str(continuation_handoff.get("continuation_mode", "off")).strip() or "off",
+            "continuation_mode": str(continuation_handoff.get("continuation_mode", "always")).strip() or "always",
             "trigger_type": str(continuation_handoff.get("trigger_type", "initial")).strip() or "initial",
             "continuation_guidance": {},
             "needs_validation_clarification": False,
@@ -483,12 +483,86 @@ class DevMasterGraph:
         return True
 
     @staticmethod
+    def _project_requires_standardized_setup(project_dir: str, implementation_targets: List[Dict[str, Any]]) -> bool:
+        if not os.path.isdir(project_dir):
+            return False
+        target_count = len([x for x in implementation_targets if isinstance(x, dict)])
+        if target_count <= 0:
+            return False
+        try:
+            top_entries = [x for x in os.listdir(project_dir) if not str(x).startswith(".")]
+        except Exception:
+            top_entries = []
+        sparse_root = len(top_entries) <= 8
+        has_dependency_state = os.path.exists(os.path.join(project_dir, "node_modules")) or os.path.exists(
+            os.path.join(project_dir, ".venv")
+        )
+        return sparse_root and not has_dependency_state and target_count >= 3
+
+    @staticmethod
+    def _infer_standardized_setup_commands(project_dir: str) -> List[str]:
+        commands: List[str] = []
+        candidates = DevMasterGraph._discover_repository_command_candidates(project_dir)
+        setup_candidates = candidates.get("setup", []) if isinstance(candidates, dict) else []
+        for command in setup_candidates:
+            cmd = str(command).strip()
+            if not cmd:
+                continue
+            executable, _ = DevMasterGraph._is_validation_command_executable(cmd, project_dir=project_dir)
+            if executable and cmd not in commands:
+                commands.append(cmd)
+        return commands
+
+    @staticmethod
     def _infer_bootstrap_tasks_from_intent(state: DevGraphState) -> List[DevTask]:
-        # Runtime policy: do not enforce a prescribed scaffolding workflow.
-        # DEV may still execute explicit commands from DEV-authored handoffs,
-        # but PM intent alone should not auto-expand into fixed scaffold recipes.
-        _ = state
-        return []
+        if not isinstance(state.get("logs"), list):
+            state["logs"] = []
+        if not isinstance(state.get("telemetry_events"), list):
+            state["telemetry_events"] = []
+        scope_root = str(state.get("scope_root", "")).strip()
+        project_root = str(state.get("project_root", "")).strip()
+        rel = project_root.split("/", 1)[1] if project_root.startswith("projects/") else project_root
+        project_dir = os.path.join(scope_root, rel) if scope_root and rel else ""
+        implementation_targets = state.get("implementation_targets", [])
+        if not project_dir or not DevMasterGraph._project_requires_standardized_setup(
+            project_dir, implementation_targets if isinstance(implementation_targets, list) else []
+        ):
+            DevMasterGraph._emit_event(
+                state,
+                "setup_strategy_rejected",
+                strategy="standardized_setup",
+                reason="project_not_sparse_or_targets_insufficient",
+            )
+            return []
+
+        setup_commands = DevMasterGraph._infer_standardized_setup_commands(project_dir)
+        if not setup_commands:
+            DevMasterGraph._emit_event(
+                state,
+                "setup_strategy_rejected",
+                strategy="standardized_setup",
+                reason="no_safe_setup_command_inferred",
+            )
+            return []
+
+        tasks = [
+            DevTask(
+                id=f"bootstrap_setup_{idx + 1}",
+                description=f"run standardized setup command: {command}",
+                command=command,
+                cwd=project_root or ".",
+                kind="bootstrap",
+            )
+            for idx, command in enumerate(setup_commands)
+        ]
+        DevMasterGraph._emit_event(
+            state,
+            "setup_strategy_selected",
+            strategy="standardized_setup",
+            setup_strategy_candidates=setup_commands,
+            setup_strategy_reason="project_sparse_and_setup_command_available",
+        )
+        return tasks
 
     @staticmethod
     def _read_package_scripts(project_dir: str) -> Dict[str, str]:

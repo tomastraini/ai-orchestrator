@@ -27,6 +27,7 @@
 
 ## Interactive Loop Semantics
 
+- Continuation is enforced by default and can be disabled only by explicit deactivation (`continuation_mode=off` or env override).
 - Continuation-eligible statuses:
   - `completed`
   - `partial_progress`
@@ -77,9 +78,10 @@
 
 ## Rollout And Rollback
 
-- Phase 1: disabled by default (`DEV_CONTINUATION_LOOP_ENABLED=false`).
-- Phase 2: enable in local/dev and validate UX + telemetry.
-- Phase 3: enable by default once stable.
+- Continuation is enabled by default in standard execution mode.
+- Explicit deactivation paths remain available for one-shot workflows:
+  - `--continuation-mode off`
+  - `DEV_CONTINUATION_LOOP_ENABLED=false`
 - Rollback:
   - set `DEV_CONTINUATION_LOOP_ENABLED=false`
   - loop behavior disables immediately, one-shot flow continues unchanged

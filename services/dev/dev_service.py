@@ -101,7 +101,7 @@ class DevService:
                 "prior_run_summary": str(final_state.get("prior_run_summary", "")).strip(),
                 "carry_forward_memory": bool(final_state.get("carry_forward_memory", True)),
                 "trigger_type": str(final_state.get("trigger_type", "initial")).strip() or "initial",
-                "continuation_mode": str(final_state.get("continuation_mode", "off")).strip() or "off",
+                "continuation_mode": str(final_state.get("continuation_mode", "always")).strip() or "always",
                 "continuation_eligible": bool(final_state.get("continuation_eligible", False)),
                 "ready_for_followup": bool(final_state.get("ready_for_followup", False)),
                 "continuation_guidance": (

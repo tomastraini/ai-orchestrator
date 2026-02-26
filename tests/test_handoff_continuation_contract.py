@@ -25,7 +25,7 @@ class HandoffContinuationContractTests(unittest.TestCase):
         continuation = handoff.get("continuation", {})
         self.assertIsInstance(continuation, dict)
         self.assertEqual(continuation.get("trigger_type"), "initial")
-        self.assertEqual(continuation.get("continuation_mode"), "off")
+        self.assertEqual(continuation.get("continuation_mode"), "always")
         self.assertEqual(continuation.get("continuation_guidance"), {})
 
     def test_ingest_rehydrates_continuation_fields(self) -> None:

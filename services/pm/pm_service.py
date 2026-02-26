@@ -564,7 +564,7 @@ def create_plan(
                 "prior_run_summary": str(continuation.get("prior_run_summary", "")).strip(),
                 "carry_forward_memory": bool(continuation.get("carry_forward_memory", True)),
                 "trigger_type": str(continuation.get("trigger_type", "improvement")).strip() or "improvement",
-                "continuation_mode": str(continuation.get("continuation_mode", "off")).strip() or "off",
+                "continuation_mode": str(continuation.get("continuation_mode", "always")).strip() or "always",
                 "continuation_guidance": (
                     dict(continuation.get("continuation_guidance", {}))
                     if isinstance(continuation.get("continuation_guidance"), dict)

@@ -26,7 +26,7 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
     state["prior_run_summary"] = str(continuation.get("prior_run_summary", "")).strip()
     state["carry_forward_memory"] = bool(continuation.get("carry_forward_memory", True))
     state["trigger_type"] = str(continuation.get("trigger_type", "initial")).strip() or "initial"
-    state["continuation_mode"] = str(continuation.get("continuation_mode", "off")).strip() or "off"
+    state["continuation_mode"] = str(continuation.get("continuation_mode", "always")).strip() or "always"
     state["continuation_guidance"] = (
         dict(continuation.get("continuation_guidance", {}))
         if isinstance(continuation.get("continuation_guidance"), dict)

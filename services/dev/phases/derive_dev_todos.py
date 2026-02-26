@@ -42,6 +42,12 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
         inferred = graph_cls._infer_bootstrap_tasks_from_intent(state)
         if isinstance(inferred, list):
             bootstrap_tasks.extend([task for task in inferred if isinstance(task, DevTask)])
+    graph_cls._emit_event(
+        state,
+        "setup_strategy_summary",
+        bootstrap_tasks=len(bootstrap_tasks),
+        strategy="standardized_setup" if bootstrap_tasks else "manual_file_construction",
+    )
 
     for i, validation in enumerate(plan.get("validation", []), start=1):
         if isinstance(validation, str):

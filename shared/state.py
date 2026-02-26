@@ -18,7 +18,7 @@ class PipelineState:
     dev_status: str = "pending"
     build_logs: Optional[str] = None
     session_id: Optional[str] = None
-    continuation_mode: str = "off"
+    continuation_mode: str = "always"
     continue_from_request_id: Optional[str] = None
     delta_requirement: Optional[str] = None
 

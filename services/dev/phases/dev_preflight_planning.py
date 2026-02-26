@@ -86,6 +86,7 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
         "os": platform.system(),
         "active_project_root": project_dir,
         "detected_stacks": detected,
+        "setup_strategy": "standardized_setup" if state.get("bootstrap_tasks") else "manual_file_construction",
         "validation_commands": validation_commands,
         "final_compile_commands": final_compile_commands,
         "raw_validation_requirements": raw_validation_requirements,

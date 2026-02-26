@@ -198,7 +198,7 @@ def run(
     *,
     mode: str = "full",
     from_latest: bool = False,
-    continuation_mode: str = "off",
+    continuation_mode: str = "always",
     session_id: str = "",
     continue_from_request_id: str = "",
     delta_requirement: str = "",
@@ -214,9 +214,11 @@ def run(
     repo_root = os.path.dirname(__file__)
     context_store = PMContextStore(repo_root=repo_root)
     session_store = DevSessionStore(repo_root=repo_root)
-    continuation_enabled = continuation_mode != "off" and _env_flag(CONTINUATION_FLAG, default=False)
+    continuation_enabled = continuation_mode != "off" and _env_flag(CONTINUATION_FLAG, default=True)
     if continuation_mode != "off" and not continuation_enabled:
         print(f"[CONTINUATION] disabled by env flag {CONTINUATION_FLAG}=false")
+    if continuation_mode == "off":
+        print("[CONTINUATION] explicitly deactivated by continuation_mode=off")
     loaded_plan: Dict[str, Any] | None = None
     loaded_handoff: Dict[str, Any] | None = None
     loaded_request_id: str | None = None
@@ -407,6 +409,7 @@ def run(
                     "request_id": state.request_id,
                     "decision": "offered",
                     "continuation_eligible": bool(result.get("continuation_eligible", False)),
+                    "loop_enforced_default": bool(continuation_mode != "off"),
                 },
             )
             if not bool(result.get("continuation_eligible", False)):
@@ -419,6 +422,7 @@ def run(
                         "session_id": active_session_id,
                         "request_id": state.request_id,
                         "final_status": state.dev_status,
+                        "hard_stop_triggered": state.dev_status == "implementation_failed",
                     },
                 )
                 session_store.close_session(active_session_id, reason="hard_stop_or_blocked")
@@ -532,6 +536,17 @@ def run(
             continue
         if bool(result.get("continuation_eligible", False)):
             print("[CONTINUATION] follow-up available but continuation mode is disabled; exiting one-shot run.")
+            artifacts_root = os.path.join(repo_root, ".orchestrator")
+            _append_jsonl(
+                os.path.join(artifacts_root, "continuation_decisions.jsonl"),
+                {
+                    "event": "explicit_deactivation",
+                    "session_id": active_session_id,
+                    "request_id": state.request_id,
+                    "continuation_mode": continuation_mode,
+                    "env_flag_enabled": _env_flag(CONTINUATION_FLAG, default=True),
+                },
+            )
         break
     return 0
 
@@ -540,7 +555,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["full", "plan", "execute"], default="full")
     parser.add_argument("--from-latest", action="store_true")
-    parser.add_argument("--continuation-mode", choices=["off", "prompt", "always"], default="off")
+    parser.add_argument("--continuation-mode", choices=["off", "prompt", "always"], default="always")
     parser.add_argument("--session-id", default="")
     parser.add_argument("--continue-from-request-id", default="")
     parser.add_argument("--delta-requirement", default="")
