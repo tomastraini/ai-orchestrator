@@ -17,12 +17,15 @@ class CognitionIndexTests(unittest.TestCase):
             with open(os.path.join(tmp, "pkg", "helper.py"), "w", encoding="utf-8") as fh:
                 fh.write("class Helper:\n    pass\n")
             cognition = build_cognition_index(tmp, ["main.py", "pkg/helper.py"])
-        self.assertEqual(cognition.get("version"), "1.0")
+        self.assertEqual(cognition.get("version"), "2.0")
         self.assertGreaterEqual(int(cognition.get("file_count", 0)), 2)
         symbols = cognition.get("symbol_index", {}).get("by_name", {})
         self.assertIn("main", symbols)
         entrypoints = cognition.get("entrypoints", [])
         self.assertTrue(any(str(item.get("path", "")).endswith("main.py") for item in entrypoints), msg=str(entrypoints))
+        self.assertIn("graph", cognition)
+        self.assertIn("resolution_hints", cognition)
+        self.assertIsInstance(cognition.get("provider_capabilities", {}), dict)
 
 
 if __name__ == "__main__":

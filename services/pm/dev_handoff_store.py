@@ -9,6 +9,8 @@ from typing import Any, Dict, List
 
 from services.pm.handoffpack_writer import write_handoffpack_yaml
 from services.workspace.project_index import scan_projects_root
+from services.workspace.cognition.index_builder import build_cognition_index
+from services.workspace.cognition.scaffold_probe import probe_scaffold_layout
 from shared.pathing import canonical_projects_path, normalize_rel_path
 
 
@@ -40,6 +42,38 @@ def _derive_structure_plan(project_root: str, plan: Dict[str, Any]) -> List[Dict
     if not structure_paths:
         structure_paths = [project_root]
     return [{"path": path, "kind": "required"} for path in structure_paths]
+
+
+def _extract_target_file_metadata(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    targets = plan.get("target_files") if isinstance(plan.get("target_files"), list) else []
+    metadata: List[Dict[str, Any]] = []
+    for item in targets:
+        if not isinstance(item, dict):
+            continue
+        metadata.append(
+            {
+                "file_name": str(item.get("file_name", "")).strip(),
+                "expected_path_hint": str(item.get("expected_path_hint", "")).strip(),
+                "creation_policy": str(item.get("creation_policy", "")).strip(),
+                "symbol_hints": [str(x) for x in item.get("symbol_hints", []) if isinstance(x, str)],
+                "candidate_paths": item.get("candidate_paths", []) if isinstance(item.get("candidate_paths"), list) else [],
+                "path_confidence": item.get("path_confidence"),
+                "entrypoint_candidate": bool(item.get("entrypoint_candidate", False)),
+            }
+        )
+    return metadata
+
+
+def _build_cognition_snapshot(repo_root: str, project_root: str) -> Dict[str, Any]:
+    rel = project_root.split("/", 1)[1] if project_root.startswith("projects/") else project_root
+    active_root = os.path.join(repo_root, rel)
+    if not os.path.isdir(active_root):
+        return {}
+    probe = probe_scaffold_layout(active_root, limit=1200)
+    rel_files = probe.get("files", []) if isinstance(probe, dict) else []
+    if not isinstance(rel_files, list):
+        rel_files = []
+    return build_cognition_index(active_root, [str(x) for x in rel_files])
 
 
 def _normalize_execution_step(
@@ -159,9 +193,10 @@ def build_dev_handoff(
                     purpose=str(cmd.get("purpose", "bootstrap")),
                 )
             )
-    workspace_context = scan_projects_root(
-        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "projects")
-    )
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    workspace_context = scan_projects_root(os.path.join(repo_root, "projects"))
+    target_file_metadata = _extract_target_file_metadata(plan)
+    cognition_snapshot = _build_cognition_snapshot(repo_root, project_root)
     snapshot_source = json.dumps(workspace_context, sort_keys=True)
     workspace_snapshot_hash = hashlib.sha1(snapshot_source.encode("utf-8")).hexdigest()
 
@@ -176,6 +211,8 @@ def build_dev_handoff(
         "validation": [str(x) for x in plan.get("validation", [])],
         "clarifications": rounds,
         "workspace_context": workspace_context,
+        "cognition_snapshot": cognition_snapshot,
+        "target_file_metadata": target_file_metadata,
         "workspace_snapshot_hash": workspace_snapshot_hash,
         "pending_tasks": [],
         "internal_checklist": [],

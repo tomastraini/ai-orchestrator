@@ -107,6 +107,27 @@ class PlanSchemaTests(unittest.TestCase):
                 msg=str(target),
             )
 
+    def test_target_file_optional_cognition_metadata_is_valid(self) -> None:
+        plan = _base_plan_new_project()
+        plan["target_files"] = [
+            {
+                "file_name": "src/main.tsx",
+                "expected_path_hint": "projects/scientific-calculator/src/main.tsx",
+                "modification_type": "modify",
+                "details": "Mount app root",
+                "creation_policy": "must_exist",
+                "symbol_hints": ["App", "createRoot"],
+                "candidate_paths": [
+                    {"path": "projects/scientific-calculator/src/main.tsx", "score": 0.9},
+                    {"path": "projects/scientific-calculator/src/index.tsx", "score": 0.5},
+                ],
+                "path_confidence": 0.8,
+                "entrypoint_candidate": True,
+            }
+        ]
+        ok, errors = validate_plan_json(plan, requirement="Create calculator app")
+        self.assertTrue(ok, msg=str(errors))
+
 
 if __name__ == "__main__":
     unittest.main()

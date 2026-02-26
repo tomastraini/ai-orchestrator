@@ -53,4 +53,6 @@ class DevGraphState(TypedDict, total=False):
     dev_technical_plan: Dict[str, Any]
     dev_plan_approved: bool
     repository_memory: Dict[str, Any]
+    target_resolution_evidence: Dict[str, Any]
+    capability_gaps: List[Dict[str, Any]]
 

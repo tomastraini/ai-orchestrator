@@ -84,8 +84,18 @@ def run(
             file_name,
             project_root=project_root,
             file_index=file_index,
+            state=state,
         )
         if not discovered:
+            gaps = state.setdefault("capability_gaps", [])
+            gaps.append(
+                {
+                    "type": "unknown_stack_or_path",
+                    "expected_path_hint": expected,
+                    "file_name": file_name,
+                    "reason": "missing_expected_file_after_discovery",
+                }
+            )
             raise RuntimeError(f"Expected target missing and discovery failed: {expected}")
         graph_cls._emit(
             state,

@@ -483,11 +483,43 @@ Validation flow now extracts file references from compiler/runtime output and em
 
 This improves forensic debugging and future correction loops without re-running the entire pipeline.
 
+### 17.6 Milestone A cognition baseline (implemented)
+
+Repository cognition is now implemented as a first-class baseline via `services/workspace/cognition/`.
+
+Primary modules:
+
+- `index_builder.py` composes the canonical cognition payload.
+- `symbol_extractor.py` extracts symbols (Python + JS/TS baseline patterns).
+- `import_graph_builder.py` builds import edges and reverse usage evidence.
+- `dependency_detector.py` and `config_toolchain_detector.py` infer dependency and toolchain signals.
+- `entrypoint_detector.py` and `path_alias_resolver.py` support alias-aware entrypoint resolution.
+- `test_mapper.py`, `architecture_signals.py`, and `scaffold_probe.py` provide structural evidence.
+- `snapshot_store.py` persists phase snapshots under `.orchestrator/cognition/<project>/<run_id>/`.
+
+PM -> Dev contract enrichments:
+
+- `services/pm/dev_handoff_store.py` now includes `cognition_snapshot` and `target_file_metadata`.
+- target metadata supports optional cognition hints (`symbol_hints`, candidate paths, confidence, entrypoint candidate flag).
+
+Dev runtime integration:
+
+- active root indexing now carries richer cognition payloads (`version=2.0` shape).
+- resolution strategy includes scaffold-probe evidence + alias-aware candidate ranking.
+- target-resolution evidence is persisted in graph state for forensic traceability.
+- post-mutation reindex events are emitted to keep runtime context fresh.
+
+Why this matters:
+
+- closes the most common scaffold alias mismatch class (`index.*` vs `main.*`) in baseline flows
+- reduces terminal failures from recoverable repository cognition gaps
+- improves explainability through per-phase cognition snapshot and capability telemetry events
+
 ---
 
 ## 18) Known Gaps Toward Cursor-Like Behavior
 
-The orchestrator is now stronger on execution reliability and path safety, but still missing a full repository cognition layer.
+The orchestrator is now stronger on execution reliability, path safety, and repository cognition baseline. Remaining work is hardening depth, precision, and broader capability routing.
 
 ### 18.1 What is strong today
 
@@ -498,9 +530,10 @@ The orchestrator is now stronger on execution reliability and path safety, but s
 
 ### 18.2 What is still missing
 
-1. **Repository cognitive model**
-   - no persistent symbol/import/dependency graph
-   - no architecture-aware targeting (routes, entrypoints, config topology)
+1. **Repository cognition hardening**
+   - improve deep AST/LSP precision across long-tail ecosystems
+   - improve incremental/delta indexing strategy for very large repositories
+   - expand cross-OS and obscure-framework fixture calibration
 2. **Structured editing engine**
    - implementation remains mostly full-content generation per file
    - no symbol/region-level edit primitives with AST-aware guards

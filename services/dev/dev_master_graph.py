@@ -25,6 +25,8 @@ from services.dev.phases.ingest_pm_plan import run as ingest_pm_plan_phase
 from services.dev.phases.prepare_execution_steps import run as prepare_execution_steps_phase
 from services.dev.types.dev_graph_state import DevGraphState
 from services.dev.edit_primitives import patch_region
+from services.workspace.cognition.scaffold_probe import probe_scaffold_layout
+from services.workspace.cognition.snapshot_store import persist_cognition_snapshot
 from services.workspace.project_index import build_cognition_index, detect_stack_from_markers, rank_candidate_files, scan_workspace_context
 from shared.dev_schemas import DevChecklistItem, DevTask, derive_project_name
 
@@ -160,6 +162,8 @@ class DevMasterGraph:
             "root_resolution_evidence": {},
             "active_root_file_index": {},
             "llm_context_contract": {},
+            "target_resolution_evidence": {},
+            "capability_gaps": [],
         }
         result = self._compiled_graph.invoke(initial_state)
         result.pop("ask_user", None)
@@ -811,7 +815,16 @@ class DevMasterGraph:
                 "by_basename": by_basename,
                 "by_basename_casefold": by_basename_casefold,
                 "by_suffix_casefold": by_suffix_casefold,
-                "cognition": {"version": "1.0", "active_root": active_root, "file_count": 0, "symbol_index": {"files": [], "by_name": {}}, "entrypoints": []},
+                "cognition": {
+                    "version": "2.0",
+                    "active_root": active_root,
+                    "file_count": 0,
+                    "symbol_index": {"files": [], "by_name": {}},
+                    "entrypoints": [],
+                    "entrypoint_aliases": {},
+                    "resolution_hints": {},
+                    "provider_capabilities": {},
+                },
             }
         for root, dirs, names in os.walk(active_root):
             dirs[:] = [d for d in dirs if d not in DevMasterGraph.INDEX_IGNORE_DIRS]
@@ -828,12 +841,14 @@ class DevMasterGraph:
                     if suffix and suffix not in by_suffix_casefold:
                         by_suffix_casefold[suffix] = rel
         cognition = build_cognition_index(active_root, files)
+        scaffold_probe = probe_scaffold_layout(active_root, limit=1200)
         return {
             "active_root": active_root,
             "files": files,
             "by_basename": by_basename,
             "by_basename_casefold": by_basename_casefold,
             "by_suffix_casefold": by_suffix_casefold,
+            "scaffold_probe": scaffold_probe,
             "cognition": cognition,
         }
 
@@ -861,6 +876,38 @@ class DevMasterGraph:
         index = DevMasterGraph._build_active_root_file_index(active_root)
         state["active_root_file_index"] = index
         DevMasterGraph._emit_index_snapshot(state, index, category)
+        probe = index.get("scaffold_probe", {}) if isinstance(index.get("scaffold_probe"), dict) else {}
+        if probe:
+            files = probe.get("files", []) if isinstance(probe.get("files"), list) else []
+            top_level = probe.get("top_level", []) if isinstance(probe.get("top_level"), list) else []
+            DevMasterGraph._emit_event(
+                state,
+                "scaffold_probe_snapshot",
+                phase=category,
+                file_count=len(files),
+                top_level=top_level[:30],
+            )
+        cognition = index.get("cognition", {}) if isinstance(index.get("cognition"), dict) else {}
+        providers = cognition.get("provider_capabilities", {}) if isinstance(cognition, dict) else {}
+        if providers:
+            DevMasterGraph._emit_event(state, "cognition_provider_capabilities", **providers)
+        request_id = str(state.get("request_id", "")).strip()
+        project_name = str(state.get("project_name", "")).strip() or derive_project_name(state.get("plan", {}))
+        if request_id and project_name and str(state.get("scope_root", "")).strip():
+            snapshot_path = persist_cognition_snapshot(
+                repo_root=str(state.get("scope_root", "")).strip(),
+                project_name=project_name,
+                run_id=request_id,
+                phase=category,
+                cognition_index=cognition if isinstance(cognition, dict) else {},
+            )
+            if snapshot_path:
+                DevMasterGraph._emit_event(
+                    state,
+                    "cognition_snapshot_created",
+                    phase=category,
+                    snapshot_path=DevMasterGraph._relpath_safe(state, snapshot_path),
+                )
         return index
 
     @staticmethod
@@ -892,6 +939,11 @@ class DevMasterGraph:
     ) -> str:
         suffix_map = index.get("by_suffix_casefold", {}) if isinstance(index.get("by_suffix_casefold"), dict) else {}
         by_basename = index.get("by_basename_casefold", {}) if isinstance(index.get("by_basename_casefold"), dict) else {}
+        cognition = index.get("cognition", {}) if isinstance(index.get("cognition"), dict) else {}
+        resolution_hints = cognition.get("resolution_hints", {}) if isinstance(cognition.get("resolution_hints"), dict) else {}
+        entrypoint_aliases = cognition.get("entrypoint_aliases", {}) if isinstance(cognition.get("entrypoint_aliases"), dict) else {}
+        entrypoint_candidates = cognition.get("entrypoints", []) if isinstance(cognition.get("entrypoints"), list) else []
+        ai_ranked_candidates = resolution_hints.get("ai_ranked_candidates", []) if isinstance(resolution_hints, dict) else []
         expected_low = expected_suffix.casefold().strip("/")
         if expected_low and expected_low in suffix_map:
             return str(suffix_map[expected_low])
@@ -912,6 +964,44 @@ class DevMasterGraph:
                     scored.sort(key=lambda x: x[0], reverse=True)
                     return str(scored[0][1])
                 return str(candidates[0])
+            hinted = resolution_hints.get("by_basename", {}) if isinstance(resolution_hints, dict) else {}
+            hinted_candidates = hinted.get(leaf.casefold(), []) if isinstance(hinted, dict) else []
+            if isinstance(hinted_candidates, list) and hinted_candidates:
+                return str(hinted_candidates[0])
+
+        # Entrypoint alias recovery for common and unknown scaffold conventions.
+        expected_parent = os.path.dirname(expected_low)
+        expected_base = os.path.basename(expected_low)
+        if expected_base.startswith("index.") or expected_base.startswith("main.") or expected_base.startswith("app."):
+            sibling_candidates: List[str] = []
+            if expected_parent in entrypoint_aliases and isinstance(entrypoint_aliases[expected_parent], list):
+                sibling_candidates.extend([str(x) for x in entrypoint_aliases[expected_parent]])
+            if not sibling_candidates:
+                for item in entrypoint_candidates:
+                    candidate_path = str(item.get("path", ""))
+                    if not candidate_path:
+                        continue
+                    if expected_parent and os.path.dirname(candidate_path.casefold()) != expected_parent:
+                        continue
+                    sibling_candidates.append(candidate_path)
+            if sibling_candidates:
+                preferred = sorted(
+                    sibling_candidates,
+                    key=lambda x: float(
+                        next(
+                            (
+                                item.get("score", 0.0)
+                                for item in entrypoint_candidates
+                                if str(item.get("path", "")) == x
+                            ),
+                            0.0,
+                        )
+                    ),
+                    reverse=True,
+                )
+                return str(preferred[0])
+        if isinstance(ai_ranked_candidates, list) and ai_ranked_candidates:
+            return str(ai_ranked_candidates[0].get("path", ""))
         return ""
 
     @staticmethod
@@ -1311,6 +1401,7 @@ class DevMasterGraph:
         *,
         project_root: str = "",
         file_index: Optional[Dict[str, Any]] = None,
+        state: Optional[DevGraphState] = None,
     ) -> str:
         if not active_root or not os.path.isdir(active_root):
             return ""
@@ -1320,13 +1411,52 @@ class DevMasterGraph:
             active_root,
             project_root,
         )
+        probe_files = []
+        scaffold_probe = index.get("scaffold_probe", {}) if isinstance(index.get("scaffold_probe"), dict) else {}
+        if isinstance(scaffold_probe.get("files"), list):
+            probe_files = [str(x) for x in scaffold_probe.get("files", [])]
+        # Prefer scaffold-discovered concrete files for ambiguous paths.
+        leaf = os.path.basename(str(file_name or "").replace("\\", "/")).strip().casefold()
+        if leaf:
+            by_leaf = [x for x in probe_files if os.path.basename(x).casefold() == leaf]
+            if by_leaf:
+                chosen = by_leaf[0]
+                if state is not None:
+                    key = expected_path_hint or file_name
+                    evidence = state.setdefault("target_resolution_evidence", {})
+                    evidence[key] = {
+                        "resolved_path": chosen,
+                        "resolution_method": "scaffold_probe",
+                        "confidence": 0.9,
+                        "candidates_considered": by_leaf[:8],
+                    }
+                return os.path.join(active_root, chosen)
         rel = DevMasterGraph._choose_best_index_candidate(
             index=index,
             expected_suffix=expected_suffix,
             file_name=file_name,
         )
         if not rel:
+            if state is not None:
+                key = expected_path_hint or file_name
+                evidence = state.setdefault("target_resolution_evidence", {})
+                evidence[key] = {
+                    "resolved_path": "",
+                    "resolution_method": "none",
+                    "confidence": 0.0,
+                    "candidates_considered": [],
+                }
             return ""
+        if state is not None:
+            key = expected_path_hint or file_name
+            confidence = 0.85 if os.path.basename(expected_suffix).casefold() == os.path.basename(rel).casefold() else 0.72
+            evidence = state.setdefault("target_resolution_evidence", {})
+            evidence[key] = {
+                "resolved_path": rel,
+                "resolution_method": "index_candidates",
+                "confidence": confidence,
+                "candidates_considered": [rel],
+            }
         return os.path.join(active_root, rel)
 
     @staticmethod
@@ -1478,6 +1608,7 @@ class DevMasterGraph:
                 file_name,
                 project_root=str(state.get("project_root", "")),
                 file_index=file_index,
+                state=state,
             )
             if discovered:
                 safe_target = discovered
@@ -1490,6 +1621,7 @@ class DevMasterGraph:
                 file_name,
                 project_root=str(state.get("project_root", "")),
                 file_index=file_index,
+                state=state,
             )
             if discovered:
                 return "observed_file", "verify_discovered_target", discovered
@@ -1633,6 +1765,10 @@ class DevMasterGraph:
                         active_root=active_root,
                         file_index=file_index,
                         target_proofs=target_proofs,
+                    )
+                    DevMasterGraph._refresh_active_root_index(
+                        state,
+                        category="post_file_mutation_index_refresh",
                     )
                     pass_actions += 1
                     total_actions += 1

@@ -1,3 +1,1 @@
-python3 -m venv .venv
-source .venv/bin/activate
-export AZURE_OPENAI_KEY=
+python3 -m venv .venv && source .venv/bin/activate && python -m pip install --upgrade pip && pip install -r requirements.txt && pip install -r requirements-cognition-optional.txt && export AZURE_OPENAI_KEY="your-key-here" && export AZURE_OPENAI_ENDPOINT="https://fullstackdevclinigma.openai.azure.com" && export AZURE_OPENAI_API_VERSION="2025-04-01-preview" && export AZURE_OPENAI_DEPLOYMENT="gpt-5.1-codex-mini"

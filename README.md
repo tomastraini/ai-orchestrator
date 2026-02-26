@@ -24,6 +24,14 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+Optional cognition providers (recommended for better repository indexing precision):
+
+```bash
+pip install -r requirements-cognition-optional.txt
+```
+
+These optional providers improve multi-language symbol/import graph quality and ranking confidence, but are not required for baseline orchestrator execution.
+
 ### 3) Configure environment variables
 
 Required:
@@ -59,6 +67,14 @@ export AZURE_OPENAI_DEPLOYMENT="gpt-5.1-codex-mini"
 ```bash
 python orchestrator.py
 ```
+
+## Ubuntu one-shot setup
+
+If you want a single copy/paste bootstrap for Ubuntu (venv + base deps + optional cognition deps + env vars), use the command in:
+
+- `autorun.txt`
+
+That command is intended for local developer setup convenience and can be adjusted to your preferred shell profile strategy.
 
 ## Diagnostics
 

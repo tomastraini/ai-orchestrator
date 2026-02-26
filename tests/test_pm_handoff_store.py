@@ -72,6 +72,28 @@ class PMHandoffStoreTests(unittest.TestCase):
             self.assertEqual(payload["latest_handoff"]["request_id"], request_id)
             self.assertIn("internal_checklist", payload["latest_handoff"])
             self.assertIn("task_outcomes", payload["latest_handoff"])
+            self.assertIn("target_file_metadata", payload["latest_handoff"])
+
+    def test_handoff_carries_optional_target_cognition_fields(self) -> None:
+        plan = self._sample_plan()
+        plan["target_files"] = [
+            {
+                "file_name": "src/main.tsx",
+                "expected_path_hint": "projects/calculator/src/main.tsx",
+                "modification_type": "modify",
+                "details": "entrypoint update",
+                "creation_policy": "must_exist",
+                "symbol_hints": ["App", "createRoot"],
+                "candidate_paths": [{"path": "projects/calculator/src/main.tsx", "score": 0.9}],
+                "path_confidence": 0.9,
+                "entrypoint_candidate": True,
+            }
+        ]
+        handoff = build_dev_handoff(request_id="req-handoff-cognition-1", plan=plan, rounds=[])
+        metadata = handoff.get("target_file_metadata", [])
+        self.assertEqual(len(metadata), 1)
+        self.assertEqual(metadata[0].get("file_name"), "src/main.tsx")
+        self.assertTrue(metadata[0].get("entrypoint_candidate"))
 
     def test_handoff_normalizes_redundant_vite_target_path(self) -> None:
         plan = self._sample_plan()

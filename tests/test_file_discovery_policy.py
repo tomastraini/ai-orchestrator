@@ -91,6 +91,49 @@ class FileDiscoveryPolicyTests(unittest.TestCase):
             )
         self.assertEqual(state["status"], "completed", msg=str(state.get("errors")))
 
+    def test_entrypoint_alias_index_to_main_resolves(self) -> None:
+        graph = DevMasterGraph()
+        plan = {
+            "summary": "Update app entrypoint",
+            "project_mode": "existing_project",
+            "project_ref": {"name": "time-app", "path_hint": "projects/time-app"},
+            "stack": {"frontend": "React", "backend": None, "language_preferences": ["TypeScript"]},
+            "pm_checklist": {
+                "project_scope": "existing_project",
+                "architecture": "frontend_only",
+                "backend_required": "no",
+                "database_required": "no",
+            },
+            "bootstrap_commands": [],
+            "target_files": [
+                {
+                    "file_name": "src/index.tsx",
+                    "expected_path_hint": "projects/time-app/src/index.tsx",
+                    "modification_type": "update",
+                    "details": "ensure app mount",
+                    "creation_policy": "must_exist",
+                }
+            ],
+            "constraints": ["none"],
+            "validation": ["python -c \"print('ok')\""],
+            "clarification_summary": [],
+        }
+        handoff = {"project_root": "projects/time-app"}
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "time-app", "src"), exist_ok=True)
+            with open(os.path.join(tmp, "time-app", "src", "main.tsx"), "w", encoding="utf-8") as fh:
+                fh.write("export default function main(){return null}\n")
+            state = graph.run(
+                request_id="discover-alias-1",
+                plan=plan,
+                scope_root=tmp,
+                handoff=handoff,
+                ask_user=lambda _: "n/a",
+            )
+        self.assertEqual(state["status"], "completed", msg=str(state.get("errors")))
+        evidence = state.get("target_resolution_evidence", {})
+        self.assertTrue(bool(evidence), msg=str(state.get("logs", [])))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,7 +14,7 @@ Today the system is strong at:
 
 It is still weaker at:
 
-- deep repository cognition
+- deep repository cognition hardening across long-tail stacks
 - symbol/region-precise editing
 - intent routing across execution vs analysis vs documentation tasks
 
@@ -36,9 +36,13 @@ For this roadmap, "~70% Cursor-like" means:
 
 ## Milestone A: Repository Cognition Index
 
+### Status
+
+Implemented as a production baseline. The orchestrator now builds a richer cognition index and uses it in runtime target resolution and handoff context. Further hardening remains in follow-on milestones.
+
 ### Deliverables
 
-- Build a project cognition index layer capturing:
+- Delivered cognition index layer capturing:
   - symbols (functions/classes/components/routes)
   - import graph
   - dependency graph
@@ -46,12 +50,25 @@ For this roadmap, "~70% Cursor-like" means:
   - test location mapping
   - config and toolchain detection
   - architecture signals (feature-based, layered, MVC-style hints)
-- Persist snapshots per run and support incremental refresh.
+- Delivered snapshot persistence per run with phase-based refresh hooks.
+
+### Delivered implementation highlights
+
+- New cognition package under `services/workspace/cognition/` with index builder, scaffold probe, resolver hints, and optional provider capability detection.
+- PM -> Dev handoff enrichment with `cognition_snapshot` and `target_file_metadata`.
+- Dev runtime integration with layered candidate resolution and post-mutation index refresh.
+- Optional tooling adapters and fallback behavior to keep baseline operational without optional providers.
 
 ### Success criteria
 
 - >=90% of implementation targets resolve to an existing candidate set before mutation.
 - Entrypoint alias mismatches (`index.*` vs `main.*`) are auto-resolved in common scaffolds.
+
+### Remaining A-hardening caveats
+
+- Deeper AST/LSP precision for long-tail ecosystems (Java/C#/C++/COBOL-style repos).
+- Stronger incremental/delta indexing for very large repositories.
+- Broader cross-OS fixture calibration and confidence threshold tuning.
 
 ## Milestone B: Structured Editing Engine
 
@@ -196,11 +213,11 @@ Use a normalized JSON artifact generated and refreshed during runs:
 
 ## Near-term execution order
 
-1. Milestone A (cognition index)
-2. Milestone D (micro-loop)
-3. Milestone B (structured edits)
-4. Milestone C (persistent memory)
-5. Milestone E (intent router)
-6. Milestone F (artifact mode)
+1. Milestone D (micro-loop)
+2. Milestone B (structured edits)
+3. Milestone C (persistent memory)
+4. Milestone E (intent router)
+5. Milestone F (artifact mode)
+6. Milestone A hardening track (precision + ecosystem coverage)
 
 This order maximizes immediate path-awareness gains while progressively unlocking broader Cursor-like behavior.

@@ -29,6 +29,7 @@ def _build_handoff_pack(handoff: Dict[str, Any]) -> Dict[str, Any]:
         "workspace": {
             "project_root": str(handoff.get("project_root", "")),
             "workspace_context": handoff.get("workspace_context", {}),
+            "cognition_snapshot": handoff.get("cognition_snapshot", {}),
             "path_aliases": handoff.get("path_aliases", {}),
         },
         "roles": {
@@ -38,6 +39,7 @@ def _build_handoff_pack(handoff: Dict[str, Any]) -> Dict[str, Any]:
         "execution": {
             "steps": handoff.get("execution_steps", []),
             "structure_plan": handoff.get("structure_plan", []),
+            "target_file_metadata": handoff.get("target_file_metadata", []),
             "command_policy": handoff.get("command_policy", {}),
             "internal_checklist": handoff.get("internal_checklist", []),
             "task_outcomes": handoff.get("task_outcomes", []),

@@ -4,8 +4,7 @@ import os
 import re
 from typing import Any, Dict, List, Optional
 
-from services.workspace.entrypoint_detector import detect_entrypoints
-from services.workspace.symbol_index import build_symbol_index
+from services.workspace.cognition.index_builder import build_cognition_index as build_cognition_index_v2
 from shared.pathing import normalize_rel_path
 
 
@@ -176,13 +175,5 @@ def rank_candidate_files(requirement: str, files: List[str], *, top_k: int = 40)
 
 def build_cognition_index(active_root: str, rel_files: List[str]) -> Dict[str, Any]:
     rel_list = [normalize_rel_path(str(item)) for item in rel_files if str(item).strip()]
-    symbol_index = build_symbol_index(active_root, rel_list)
-    entrypoints = detect_entrypoints(active_root, rel_list, symbol_index)
-    return {
-        "version": "1.0",
-        "active_root": normalize_rel_path(active_root),
-        "file_count": len(rel_list),
-        "symbol_index": symbol_index,
-        "entrypoints": entrypoints,
-    }
+    return build_cognition_index_v2(active_root, rel_list)
 

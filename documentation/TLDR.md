@@ -123,6 +123,11 @@ Other common modes:
 - Mutation proof tracking is more robust (stable per-target tracking).
 - Low-signal/no-op style updates are explicitly rejected.
 - Validation now extracts file-reference diagnostics for targeted follow-up.
+- Milestone A cognition baseline is now implemented:
+  - canonical cognition index with symbols, imports, dependencies, entrypoints, tests, configs/toolchain, and architecture signals
+  - scaffold probe evidence and post-mutation index refresh snapshots
+  - alias-aware target recovery and per-target resolution evidence
+  - optional provider capability detection (with heuristic fallback when providers are unavailable)
 
 ---
 
@@ -130,8 +135,8 @@ Other common modes:
 
 - **Planning and safety**: strong
 - **Execution and retries**: strong
-- **Path awareness**: improved but not complete
-- **Repository cognition**: limited
+- **Path awareness**: strong (with layered candidate recovery)
+- **Repository cognition**: implemented baseline
 - **Structured code editing**: partial
 - **Artifact flexibility (docs/diagrams/specs as first-class outputs)**: limited
 
@@ -141,19 +146,19 @@ Other common modes:
 
 To get substantially closer to Cursor-like behavior, the system still needs:
 
-1. Repository cognition index (symbols, imports, dependencies, entrypoints, config graph).
-2. Structured symbol/region editing primitives (not mostly full-file generation).
-3. Persistent repository memory between locate/modify/validate micro-steps.
-4. Intent router for execution vs analysis vs documentation/artifact generation.
-5. Semantic diff self-evaluation before accepting an edit as successful.
+1. Deeper structured symbol/region editing primitives (not mostly full-file generation).
+2. Stronger persistent repository memory between locate/modify/validate micro-steps.
+3. Intent router maturation for execution vs analysis vs documentation/artifact generation.
+4. Strong semantic diff self-evaluation before accepting an edit as successful.
+5. Hardening depth for long-tail ecosystems (broader fixtures, confidence calibration, richer AST/LSP providers).
 
 ---
 
-## Known current failure pattern
+## Known failure class (now handled in baseline flow)
 
 A representative recent failure class:
 
 - Plan targets `src/index.tsx`, scaffold creates `src/main.tsx` (Vite React default).
-- Dev fails with `Expected target missing and discovery failed: .../src/index.tsx`.
+- Dev now uses layered recovery (scaffold probe + alias-aware candidate ranking) before terminal failure.
 
-This is not a command-execution failure; it is a repository-cognition mismatch (target alias resolution gap).
+This remains a key reliability class to harden further, but it is now treated as a recoverable cognition mismatch rather than an immediate hard-stop in common cases.

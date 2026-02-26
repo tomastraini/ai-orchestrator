@@ -36,6 +36,10 @@ ALLOWED_TARGET_FILE_KEYS = {
     "modification_type",
     "details",
     "creation_policy",
+    "symbol_hints",
+    "candidate_paths",
+    "path_confidence",
+    "entrypoint_candidate",
 }
 ALLOWED_PROJECT_REF_KEYS = {"name", "path_hint"}
 ALLOWED_STACK_KEYS = {"frontend", "backend", "language_preferences"}
@@ -221,6 +225,58 @@ def validate_plan_json(plan: Any, requirement: Optional[str] = None) -> Tuple[bo
             ):
                 errors.append(
                     f"target_files[{i}].expected_path_hint must be under 'projects/' for new projects."
+                )
+            symbol_hints = tf.get("symbol_hints")
+            if symbol_hints is not None:
+                errors.extend(
+                    _require_list_of_non_empty_strings(
+                        symbol_hints,
+                        f"target_files[{i}].symbol_hints",
+                        allow_empty=True,
+                    )
+                )
+            candidate_paths = tf.get("candidate_paths")
+            if candidate_paths is not None:
+                if not isinstance(candidate_paths, list):
+                    errors.append(f"target_files[{i}].candidate_paths must be an array when provided.")
+                else:
+                    for j, candidate in enumerate(candidate_paths):
+                        if not isinstance(candidate, dict):
+                            errors.append(
+                                f"target_files[{i}].candidate_paths[{j}] must be an object."
+                            )
+                            continue
+                        path_val = candidate.get("path")
+                        if not _is_non_empty_str(path_val):
+                            errors.append(
+                                f"target_files[{i}].candidate_paths[{j}].path must be a non-empty string."
+                            )
+                        score_val = candidate.get("score")
+                        if score_val is not None:
+                            try:
+                                score_num = float(score_val)
+                            except Exception:
+                                errors.append(
+                                    f"target_files[{i}].candidate_paths[{j}].score must be numeric when provided."
+                                )
+                            else:
+                                if score_num < 0.0 or score_num > 1.0:
+                                    errors.append(
+                                        f"target_files[{i}].candidate_paths[{j}].score must be within [0, 1]."
+                                    )
+            path_confidence = tf.get("path_confidence")
+            if path_confidence is not None:
+                try:
+                    confidence_num = float(path_confidence)
+                except Exception:
+                    errors.append(f"target_files[{i}].path_confidence must be numeric when provided.")
+                else:
+                    if confidence_num < 0.0 or confidence_num > 1.0:
+                        errors.append(f"target_files[{i}].path_confidence must be within [0, 1].")
+            entrypoint_candidate = tf.get("entrypoint_candidate")
+            if entrypoint_candidate is not None and not isinstance(entrypoint_candidate, bool):
+                errors.append(
+                    f"target_files[{i}].entrypoint_candidate must be a boolean when provided."
                 )
 
     # constraints
