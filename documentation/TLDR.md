@@ -110,3 +110,50 @@ Other common modes:
 3. Execution is phase-based, observable, and retry-aware.
 4. Safety boundaries and constraints are enforced during command runs.
 5. Persistent artifacts make debugging and resume practical.
+
+---
+
+## What improved recently
+
+- PM contract now supports target-level creation policy:
+  - `must_exist`
+  - `create_if_missing`
+- Dev now re-indexes workspace state after each handoff command.
+- Dev emits implementation index refresh telemetry during mutation phase.
+- Mutation proof tracking is more robust (stable per-target tracking).
+- Low-signal/no-op style updates are explicitly rejected.
+- Validation now extracts file-reference diagnostics for targeted follow-up.
+
+---
+
+## Current capability matrix
+
+- **Planning and safety**: strong
+- **Execution and retries**: strong
+- **Path awareness**: improved but not complete
+- **Repository cognition**: limited
+- **Structured code editing**: partial
+- **Artifact flexibility (docs/diagrams/specs as first-class outputs)**: limited
+
+---
+
+## What is still missing for Cursor-like behavior
+
+To get substantially closer to Cursor-like behavior, the system still needs:
+
+1. Repository cognition index (symbols, imports, dependencies, entrypoints, config graph).
+2. Structured symbol/region editing primitives (not mostly full-file generation).
+3. Persistent repository memory between locate/modify/validate micro-steps.
+4. Intent router for execution vs analysis vs documentation/artifact generation.
+5. Semantic diff self-evaluation before accepting an edit as successful.
+
+---
+
+## Known current failure pattern
+
+A representative recent failure class:
+
+- Plan targets `src/index.tsx`, scaffold creates `src/main.tsx` (Vite React default).
+- Dev fails with `Expected target missing and discovery failed: .../src/index.tsx`.
+
+This is not a command-execution failure; it is a repository-cognition mismatch (target alias resolution gap).

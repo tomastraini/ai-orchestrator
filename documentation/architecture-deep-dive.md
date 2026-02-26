@@ -408,3 +408,156 @@ flowchart TD
 - **Final compile gate**: last confidence checkpoint after validation tasks.
 - **Checklist cursor**: marker for progress through internal execution checklist items.
 - **Scope root**: command execution boundary (the `projects/` directory tree).
+
+---
+
+## 17) New Landscape (Path-Safe Enhancements)
+
+This section reflects the current architecture after the path-safety implementation pass.
+
+### 17.1 Contract-level file creation policy
+
+PM plans now support per-target creation intent:
+
+- `creation_policy: must_exist`
+- `creation_policy: create_if_missing`
+
+Where this is enforced:
+
+- `shared/schemas.py` validates allowed values under each `target_files[]` entry.
+- `services/pm/pm_service.py` normalizes policy defaults:
+  - update-like tasks default to `must_exist`
+  - create-like tasks default to `create_if_missing`
+
+Why this matters:
+
+- prevents unintentional duplicate file creation
+- makes "modify existing file" behavior explicit and machine-checkable
+
+### 17.2 Per-handoff repository re-index
+
+During bootstrap/handoff execution, the Dev graph now performs re-index snapshots after each handoff command:
+
+- emits `post_handoff_index_refresh` telemetry events
+- refreshes active root evidence before moving to next step
+
+This is implemented in `services/dev/dev_master_graph.py`.
+
+Why this matters:
+
+- the agent no longer relies on stale pre-scaffold assumptions
+- each subsequent handoff sees the newest repository shape
+
+### 17.3 Implementation-phase active root index
+
+During implementation, the Dev graph now builds/refreshes an active-root file index:
+
+- emits `implementation_index_refresh`
+- tracks file basenames and suffix candidates for path resolution
+- attempts deterministic path recovery before hard failure
+
+Why this matters:
+
+- reduces blind target guesses
+- increases probability of finding existing files under nested structures
+
+### 17.4 Mutation-proof and edit-quality hardening
+
+The implementation phase now includes stronger safety semantics:
+
+- mutation proof keyed by stable implementation checklist id (not shared path hint)
+- verify-style targets treated as non-mutating checks
+- low-signal/no-op style updates are rejected
+- dotfiles are treated as files (for example, `.gitignore`)
+
+Why this matters:
+
+- avoids false checklist failures from cross-target hash collisions
+- prevents "comment-only" style edits from being counted as success
+
+### 17.5 Additional runtime diagnostics
+
+Validation flow now extracts file references from compiler/runtime output and emits them as telemetry for targeted follow-up:
+
+- `validation_error_file_refs`
+
+This improves forensic debugging and future correction loops without re-running the entire pipeline.
+
+---
+
+## 18) Known Gaps Toward Cursor-Like Behavior
+
+The orchestrator is now stronger on execution reliability and path safety, but still missing a full repository cognition layer.
+
+### 18.1 What is strong today
+
+- planning and contract enforcement
+- scoped/safe command execution
+- retries, logging, and run artifacts
+- incremental path-awareness improvements
+
+### 18.2 What is still missing
+
+1. **Repository cognitive model**
+   - no persistent symbol/import/dependency graph
+   - no architecture-aware targeting (routes, entrypoints, config topology)
+2. **Structured editing engine**
+   - implementation remains mostly full-content generation per file
+   - no symbol/region-level edit primitives with AST-aware guards
+3. **Persistent repository memory**
+   - limited carry-forward of "what was learned" across editing micro-steps
+4. **Iterative locate-modify-validate micro-loop**
+   - current graph remains phase-linear at a high level
+5. **Intent-based capability routing**
+   - execution path is still dominant; doc/analysis generation is not first-class
+6. **Artifact reasoning breadth**
+   - code execution is stronger than non-code artifact generation governance
+7. **Semantic diff self-evaluation**
+   - no robust "did this edit satisfy intent?" scorer before accepting change
+
+---
+
+## 19) Postmortem: `time-app` Run (`dad281de-c182-4778-88d8-66b3f028b76f`)
+
+### 19.1 What worked
+
+- scaffold succeeded (`npm create vite@latest ... react-ts`)
+- dependency install succeeded
+- dev server smoke validation succeeded
+- runtime index refresh events were emitted and captured
+
+### 19.2 What failed
+
+- implementation failed with:
+  - `Expected target missing and discovery failed: projects/time-app/src/index.tsx`
+- checklist items `todo_impl_1..todo_impl_9` then failed as a cascade
+
+### 19.3 Evidence from artifacts
+
+- indexed files contained `src/main.tsx`
+- indexed files did not contain `src/index.tsx`
+- root cause was path target mismatch in plan/targets vs scaffold reality
+
+### 19.4 Root cause class
+
+**Entry-file alias mismatch** between framework/scaffold conventions and PM target assumptions.
+
+For Vite React templates:
+
+- expected entrypoint is often `src/main.tsx`
+- not `src/index.tsx`
+
+### 19.5 Near-term mitigations
+
+1. add entrypoint alias mapping in implementation resolution (`index.*` <-> `main.*` where stack markers support it)
+2. improve plan-time target normalization using scaffold-aware file existence checks after bootstrap
+3. before checklist mutation phase, run a target existence reconciliation pass and rewrite ambiguous targets to discovered canonical files
+4. classify this failure as recoverable context gap first, not terminal implementation failure
+
+### 19.6 Why this postmortem matters
+
+This run demonstrates the current state well:
+
+- execution and telemetry are strong
+- path cognition is improved
+- but repository cognition is not yet deep enough to auto-resolve scaffold-specific semantic aliases consistently
