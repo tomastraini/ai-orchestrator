@@ -119,6 +119,11 @@ class DevMasterGraph:
         max_model_calls_per_run: int = 1,
         log_sink: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
+        continuation_handoff = (
+            handoff.get("continuation", {})
+            if isinstance(handoff, dict) and isinstance(handoff.get("continuation"), dict)
+            else {}
+        )
         initial_state: DevGraphState = {
             "request_id": request_id,
             "plan": plan,
@@ -182,16 +187,25 @@ class DevMasterGraph:
             "target_resolution_evidence": {},
             "capability_gaps": [],
             "reliability_metrics": {},
+            "pending_tasks": [],
+            "session_id": str(continuation_handoff.get("session_id", "")).strip(),
+            "parent_request_id": str(continuation_handoff.get("parent_request_id", "")).strip(),
+            "iteration_index": int(continuation_handoff.get("iteration_index", 0) or 0),
+            "continuation_reason": str(continuation_handoff.get("continuation_reason", "initial")).strip() or "initial",
+            "delta_requirement": str(continuation_handoff.get("delta_requirement", "")).strip(),
+            "prior_run_summary": str(continuation_handoff.get("prior_run_summary", "")).strip(),
+            "carry_forward_memory": bool(continuation_handoff.get("carry_forward_memory", True)),
+            "continuation_eligible": False,
+            "ready_for_followup": False,
+            "continuation_mode": str(continuation_handoff.get("continuation_mode", "off")).strip() or "off",
+            "trigger_type": str(continuation_handoff.get("trigger_type", "initial")).strip() or "initial",
         }
-        initial_state["repository_memory"] = DevMasterGraph._trim_repository_memory(
-            {
-                **DevMasterGraph._default_repository_memory(),
-                **(
-                    initial_state.get("repository_memory", {})
-                    if isinstance(initial_state.get("repository_memory"), dict)
-                    else {}
-                ),
-            }
+        initial_state["repository_memory"] = DevMasterGraph._initialize_repository_memory(initial_state, handoff)
+        DevMasterGraph._emit_event(
+            initial_state,
+            "memory_carried_forward" if bool(initial_state.get("carry_forward_memory", True)) else "memory_reset",
+            carry_forward_memory=bool(initial_state.get("carry_forward_memory", True)),
+            iteration_index=int(initial_state.get("iteration_index", 0) or 0),
         )
         result = self._compiled_graph.invoke(initial_state)
         result.pop("ask_user", None)
@@ -264,6 +278,41 @@ class DevMasterGraph:
         }
 
     @staticmethod
+    def _initialize_repository_memory(state: DevGraphState, handoff: Dict[str, Any] | None) -> Dict[str, Any]:
+        prior_memory = handoff.get("memory", {}) if isinstance(handoff, dict) else {}
+        if not bool(state.get("carry_forward_memory", True)):
+            return DevMasterGraph._default_repository_memory()
+        merged = DevMasterGraph._merge_repository_memory(
+            DevMasterGraph._default_repository_memory(),
+            prior_memory if isinstance(prior_memory, dict) else {},
+        )
+        if DevMasterGraph._workspace_changed_significantly(handoff):
+            merged["candidate_rejections"] = []
+            merged["candidate_attempts"] = []
+        return DevMasterGraph._trim_repository_memory(merged)
+
+    @staticmethod
+    def _merge_repository_memory(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+        merged: Dict[str, Any] = {
+            key: (list(value) if isinstance(value, list) else [])
+            for key, value in base.items()
+        }
+        for key, value in incoming.items():
+            if key not in merged:
+                merged[key] = []
+            if isinstance(value, list):
+                merged[key].extend(value)
+        return merged
+
+    @staticmethod
+    def _workspace_changed_significantly(handoff: Dict[str, Any] | None) -> bool:
+        if not isinstance(handoff, dict):
+            return False
+        previous = str(handoff.get("workspace_snapshot_hash", "")).strip()
+        current = str(handoff.get("workspace_snapshot_hash_current", "")).strip()
+        return bool(previous and current and previous != current)
+
+    @staticmethod
     def _trim_repository_memory(memory: Dict[str, Any]) -> Dict[str, Any]:
         for key, limit in DevMasterGraph.MEMORY_LIMITS.items():
             value = memory.get(key, [])
@@ -291,6 +340,8 @@ class DevMasterGraph:
             "timestamp_ms": int(time.time() * 1000),
             "phase": str(state.get("current_step", "")),
             "kind": bucket,
+            "source_request_id": str(state.get("request_id", "")),
+            "iteration_index": int(state.get("iteration_index", 0) or 0),
             "data": payload,
         }
         memory.setdefault(bucket, []).append(entry)
@@ -741,6 +792,11 @@ class DevMasterGraph:
     def _build_internal_checklist(state: DevGraphState) -> None:
         handoff = state.get("handoff") or {}
         restored = handoff.get("internal_checklist")
+        reopened_ids = {
+            str(x).strip()
+            for x in (handoff.get("reopened_checklist_ids", []) if isinstance(handoff, dict) else [])
+            if str(x).strip()
+        }
         restored_by_id: Dict[str, Dict[str, Any]] = {}
         if isinstance(restored, list) and restored:
             for item in restored:
@@ -763,7 +819,7 @@ class DevMasterGraph:
                     success_criteria=["command exits with code 0"],
                 )
             )
-            checklist.append(restored_by_id.get(item_id, default_item))
+            checklist.append(DevMasterGraph._reconcile_checklist_item(restored_by_id.get(item_id), default_item, reopened_ids))
         for idx, target in enumerate(state.get("implementation_targets", []), start=1):
             file_name = str(target.get("file_name", "")).strip() or f"target_{idx}"
             item_id = f"todo_impl_{idx}"
@@ -776,7 +832,7 @@ class DevMasterGraph:
                     success_criteria=["target file mutated with evidence"],
                 )
             )
-            checklist.append(restored_by_id.get(item_id, default_item))
+            checklist.append(DevMasterGraph._reconcile_checklist_item(restored_by_id.get(item_id), default_item, reopened_ids))
         for task in state.get("validation_tasks", []):
             item_id = f"todo_{task.id}"
             default_item = asdict(
@@ -789,7 +845,7 @@ class DevMasterGraph:
                     mandatory=False,
                 )
             )
-            checklist.append(restored_by_id.get(item_id, default_item))
+            checklist.append(DevMasterGraph._reconcile_checklist_item(restored_by_id.get(item_id), default_item, reopened_ids))
         for task in state.get("final_compile_tasks", []):
             deps = [str(item.get("id")) for item in checklist if isinstance(item, dict)]
             item_id = f"todo_{task.id}"
@@ -803,7 +859,26 @@ class DevMasterGraph:
                     success_criteria=["compile/build gate command completed"],
                 )
             )
-            checklist.append(restored_by_id.get(item_id, default_item))
+            checklist.append(DevMasterGraph._reconcile_checklist_item(restored_by_id.get(item_id), default_item, reopened_ids))
+        delta_requirement = str(state.get("delta_requirement", "")).strip()
+        if delta_requirement:
+            delta_item_id = f"todo_delta_{int(state.get('iteration_index', 0) or 0)}"
+            default_delta_item = asdict(
+                DevChecklistItem(
+                    id=delta_item_id,
+                    kind="validation",
+                    description=f"validate delta requirement: {delta_requirement}",
+                    success_criteria=["delta requirement addressed in implementation or explanation"],
+                    mandatory=False,
+                )
+            )
+            checklist.append(
+                DevMasterGraph._reconcile_checklist_item(
+                    restored_by_id.get(delta_item_id),
+                    default_delta_item,
+                    reopened_ids,
+                )
+            )
         state["internal_checklist"] = checklist
         DevMasterGraph._reindex_checklist(state)
         if restored_by_id:
@@ -811,8 +886,38 @@ class DevMasterGraph:
                 state,
                 f"[CHECKLIST] restored_and_reconciled items={len(checklist)} restored={len(restored_by_id)}",
             )
+            if reopened_ids:
+                DevMasterGraph._emit_event(
+                    state,
+                    "checklist_reopened",
+                    reopened_count=len(reopened_ids),
+                    reopened_ids=sorted(reopened_ids),
+                )
         else:
             DevMasterGraph._emit(state, f"[CHECKLIST] initialized items={len(checklist)}")
+
+    @staticmethod
+    def _reconcile_checklist_item(
+        restored: Dict[str, Any] | None,
+        default_item: Dict[str, Any],
+        reopened_ids: Set[str],
+    ) -> Dict[str, Any]:
+        if not isinstance(restored, dict):
+            return default_item
+        merged = dict(default_item)
+        merged.update(restored)
+        item_id = str(merged.get("id", "")).strip()
+        if item_id and item_id in reopened_ids:
+            merged["status"] = "reopened_by_delta"
+            merged["status_reason"] = "reopened_by_delta"
+        else:
+            status = str(merged.get("status", "pending")).strip() or "pending"
+            if status not in {"completed", "pending", "failed", "blocked", "reopened_by_delta"}:
+                status = "pending"
+            merged["status"] = status
+            if "status_reason" not in merged:
+                merged["status_reason"] = status
+        return merged
 
     @staticmethod
     def _ingest_pm_plan(state: DevGraphState) -> DevGraphState:
@@ -3065,6 +3170,30 @@ class DevMasterGraph:
                     criterion=terminal_gate.get("criterion", "none"),
                     gate=terminal_gate,
                 )
+        status = str(state.get("status", "unknown"))
+        continuation_reason_map = {
+            "completed": "completed_with_followup_possible",
+            "partial_progress": "partial_progress_continue_recommended",
+            "recoverable_blocked": "recoverable_blocker_continue_recommended",
+            "bootstrap_failed": "bootstrap_failed_continue_possible",
+            "implementation_failed": "terminal_failure_gate_approved",
+        }
+        continuation_eligible = status in {
+            "completed",
+            "partial_progress",
+            "recoverable_blocked",
+            "bootstrap_failed",
+        }
+        state["continuation_eligible"] = continuation_eligible
+        state["ready_for_followup"] = continuation_eligible
+        state["continuation_reason"] = continuation_reason_map.get(status, "continuation_not_available")
+        DevMasterGraph._emit_event(
+            state,
+            "continuation_offered" if continuation_eligible else "continuation_blocked",
+            status=status,
+            continuation_eligible=continuation_eligible,
+            continuation_reason=state.get("continuation_reason", ""),
+        )
         err_count = len(state.get("errors", []))
         checklist_total = len(state.get("internal_checklist", []))
         checklist_completed = len(
@@ -3074,11 +3203,18 @@ class DevMasterGraph:
                 if isinstance(item, dict) and str(item.get("status", "")) == "completed"
             ]
         )
+        state["pending_tasks"] = [
+            str(item.get("id", "")).strip()
+            for item in state.get("internal_checklist", [])
+            if isinstance(item, dict) and str(item.get("status", "")) != "completed"
+        ]
         state["final_summary"] = (
             f"Developer master finished with status={state['status']} and errors={err_count}. "
             f"phase_status={state.get('phase_status', {})} "
             f"pass_status={state.get('implementation_pass_statuses', [])} "
-            f"checklist={checklist_completed}/{checklist_total}"
+            f"checklist={checklist_completed}/{checklist_total} "
+            f"ready_for_followup={state.get('ready_for_followup', False)} "
+            f"continuation_reason={state.get('continuation_reason', '')}"
         )
         outcomes = [x for x in state.get("task_outcomes", []) if isinstance(x, dict)]
         failed_outcomes = [x for x in outcomes if str(x.get("status", "")) != "completed"]

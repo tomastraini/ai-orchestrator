@@ -26,17 +26,19 @@ class PMContextStore:
 
     def _read_all(self) -> Dict[str, Any]:
         if not os.path.exists(self.store_path):
-            return {"latest_context": None}
+            return {"latest_context": None, "contexts": []}
 
         with open(self.store_path, "r", encoding="utf-8") as fh:
             raw = fh.read().strip()
             if not raw:
-                return {"latest_context": None}
+                return {"latest_context": None, "contexts": []}
             data = json.loads(raw)
             if not isinstance(data, dict):
-                return {"latest_context": None}
+                return {"latest_context": None, "contexts": []}
             if "latest_context" not in data:
                 data["latest_context"] = None
+            if "contexts" not in data or not isinstance(data.get("contexts"), list):
+                data["contexts"] = []
             return data
 
     def _write_all(self, data: Dict[str, Any]) -> None:
@@ -49,11 +51,35 @@ class PMContextStore:
         entry = data.get("latest_context")
         return entry if isinstance(entry, dict) else None
 
+    def get_context_by_request_id(self, request_id: str) -> Optional[Dict[str, Any]]:
+        normalized = str(request_id or "").strip()
+        if not normalized:
+            return None
+        data = self._read_all()
+        latest = data.get("latest_context")
+        if isinstance(latest, dict) and str(latest.get("request_id", "")) == normalized:
+            return latest
+        for entry in data.get("contexts", []):
+            if isinstance(entry, dict) and str(entry.get("request_id", "")) == normalized:
+                return entry
+        return None
+
     def load_context(self, request_id: str, original_requirement: Optional[str] = None) -> Dict[str, Any]:
         data = self._read_all()
         entry = data.get("latest_context")
         if isinstance(entry, dict) and entry.get("request_id") == request_id:
             return entry
+        if isinstance(entry, dict):
+            archived = [entry] + [x for x in data.get("contexts", []) if isinstance(x, dict)]
+            deduped: list[Dict[str, Any]] = []
+            seen: set[str] = set()
+            for item in archived:
+                rid = str(item.get("request_id", "")).strip()
+                if not rid or rid in seen:
+                    continue
+                deduped.append(item)
+                seen.add(rid)
+            data["contexts"] = deduped[:200]
 
         new_entry: Dict[str, Any] = {
             "request_id": request_id,
@@ -133,4 +159,9 @@ class PMContextStore:
         entry = data.get("latest_context")
         if isinstance(entry, dict) and entry.get("request_id") == request_id:
             data["latest_context"] = None
-            self._write_all(data)
+        data["contexts"] = [
+            x
+            for x in data.get("contexts", [])
+            if isinstance(x, dict) and str(x.get("request_id", "")) != request_id
+        ]
+        self._write_all(data)

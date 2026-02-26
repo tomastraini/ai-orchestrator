@@ -79,6 +79,53 @@ class TerminalFailureGateTests(unittest.TestCase):
         )
         self.assertFalse(bool(gate.get("approved")), msg=str(gate))
 
+    def test_finalize_marks_followup_ready_for_non_terminal_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = {
+                "scope_root": tmp,
+                "request_id": "req-followup",
+                "current_step": "",
+                "logs": [],
+                "errors": [],
+                "task_outcomes": [],
+                "touched_paths": [],
+                "attempt_history": [],
+                "phase_status": {"finalize_result": "pending"},
+                "bootstrap_status": "completed",
+                "implementation_status": "completed",
+                "validation_status": "completed",
+                "final_compile_status": "failed",
+                "internal_checklist": [],
+                "telemetry_events": [],
+            }
+            out = DevMasterGraph._finalize_result_impl(state)  # type: ignore[arg-type]
+            self.assertEqual(out.get("status"), "partial_progress")
+            self.assertTrue(bool(out.get("ready_for_followup")))
+            self.assertTrue(bool(out.get("continuation_eligible")))
+
+    def test_finalize_blocks_followup_on_implementation_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = {
+                "scope_root": tmp,
+                "request_id": "req-terminal",
+                "current_step": "",
+                "logs": [],
+                "errors": ["policy violation"],
+                "task_outcomes": [],
+                "touched_paths": [],
+                "attempt_history": [],
+                "phase_status": {"finalize_result": "pending"},
+                "bootstrap_status": "completed",
+                "implementation_status": "completed",
+                "validation_status": "completed",
+                "final_compile_status": "failed",
+                "internal_checklist": [],
+                "telemetry_events": [],
+            }
+            out = DevMasterGraph._finalize_result_impl(state)  # type: ignore[arg-type]
+            self.assertEqual(out.get("status"), "implementation_failed")
+            self.assertFalse(bool(out.get("continuation_eligible")))
+
 
 if __name__ == "__main__":
     unittest.main()

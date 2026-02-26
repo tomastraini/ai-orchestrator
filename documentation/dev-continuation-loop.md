@@ -1,0 +1,59 @@
+# DEV Continuation Loop
+
+## Session Lifecycle
+
+- A DEV continuation session persists at `.orchestrator/dev_session.json`.
+- Each session tracks:
+  - `session_id`, `root_requirement`, timestamps, status
+  - ordered `run_chain` entries for every iteration
+  - lightweight `session_changelog` summaries
+- Session transitions:
+  - `active` on create
+  - remains active across continuation-eligible outcomes
+  - `closed` when user declines follow-up or explicitly closes
+
+## Continuation Contract
+
+- Handoff includes a `continuation` object with:
+  - lineage: `session_id`, `parent_request_id`, `iteration_index`
+  - intent: `trigger_type`, `delta_requirement`, `prior_run_summary`
+  - behavior: `carry_forward_memory`, `continuation_mode`, `continuation_reason`
+- DEV graph rehydrates this contract during ingest and uses it to:
+  - carry forward memory deterministically (bounded by memory caps)
+  - extend/reconcile checklist continuity
+  - emit follow-up eligibility on finalize
+
+## Failure Policy
+
+- Terminal hard-stop remains unchanged:
+  - only approved terminal gate outcomes become `implementation_failed`
+  - approved criteria: integrity compromise or LLM budget exhaustion
+- Continuation eligibility is exposed for:
+  - `completed`
+  - `partial_progress`
+  - `recoverable_blocked`
+  - `bootstrap_failed`
+- `implementation_failed` is continuation-blocked with explicit reason.
+
+## Artifacts And Telemetry
+
+- Session/continuation artifacts:
+  - `.orchestrator/session_summary.json`
+  - `.orchestrator/iteration_summaries.jsonl`
+  - `.orchestrator/continuation_decisions.jsonl`
+  - `.orchestrator/requirement_deltas.jsonl`
+- Existing run artifacts remain unchanged and include linked session metadata.
+- Key continuation events:
+  - `continuation_offered`, `continuation_accepted`, `continuation_declined`
+  - `continuation_started`, `continuation_completed`
+  - `session_closed`, `checklist_reopened`, `memory_carried_forward`
+
+## Rollout And Rollback
+
+- Phase 1: disabled by default (`DEV_CONTINUATION_LOOP_ENABLED=false`).
+- Phase 2: enable in local/dev and validate UX + telemetry.
+- Phase 3: enable by default once stable.
+- Rollback:
+  - set `DEV_CONTINUATION_LOOP_ENABLED=false`
+  - loop behavior disables immediately, one-shot flow continues unchanged
+  - persisted session artifacts remain read-only historical data.

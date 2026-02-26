@@ -9,6 +9,8 @@ class DevMemoryEntry(TypedDict, total=False):
     timestamp_ms: int
     phase: str
     kind: str
+    source_request_id: str
+    iteration_index: int
     data: Dict[str, Any]
 
 
@@ -78,4 +80,16 @@ class DevGraphState(TypedDict, total=False):
     target_resolution_evidence: Dict[str, Any]
     capability_gaps: List[Dict[str, Any]]
     reliability_metrics: Dict[str, Any]
+    pending_tasks: List[str]
+    session_id: str
+    parent_request_id: str
+    iteration_index: int
+    continuation_reason: str
+    delta_requirement: str
+    prior_run_summary: str
+    carry_forward_memory: bool
+    continuation_eligible: bool
+    ready_for_followup: bool
+    continuation_mode: str
+    trigger_type: str
 

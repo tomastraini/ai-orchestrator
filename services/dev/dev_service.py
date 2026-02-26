@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Optional
 
 from services.dev.intent_router import INTENT_ANALYSIS, INTENT_ARTIFACT, route_plan_intent
 from services.dev.dev_master_graph import DevMasterGraph
+from services.dev.dev_session_store import DevSessionStore
 from shared.handoff_ports import HandoffWriter
 
 
@@ -33,7 +34,8 @@ class DevService:
         log_sink: Optional[LogSinkFn] = None,
         handoff_writer: Optional[HandoffWriter] = None,
         run_artifacts_root: Optional[str] = None,
-    ) -> Dict[str, Optional[str]]:
+        session_store: Optional[DevSessionStore] = None,
+    ) -> Dict[str, Any]:
         """
         Execute PM-authored plan in a linear developer workflow.
         """
@@ -90,6 +92,19 @@ class DevService:
             updated_handoff["task_outcomes"] = task_outcomes if isinstance(task_outcomes, list) else []
             updated_handoff["dev_preflight_plan"] = final_state.get("dev_preflight_plan", {})
             updated_handoff["memory"] = final_state.get("repository_memory", {})
+            updated_handoff["continuation"] = {
+                "session_id": str(final_state.get("session_id", "")).strip(),
+                "parent_request_id": str(final_state.get("parent_request_id", "")).strip(),
+                "iteration_index": int(final_state.get("iteration_index", 0) or 0),
+                "continuation_reason": str(final_state.get("continuation_reason", "")).strip(),
+                "delta_requirement": str(final_state.get("delta_requirement", "")).strip(),
+                "prior_run_summary": str(final_state.get("prior_run_summary", "")).strip(),
+                "carry_forward_memory": bool(final_state.get("carry_forward_memory", True)),
+                "trigger_type": str(final_state.get("trigger_type", "initial")).strip() or "initial",
+                "continuation_mode": str(final_state.get("continuation_mode", "off")).strip() or "off",
+                "continuation_eligible": bool(final_state.get("continuation_eligible", False)),
+                "ready_for_followup": bool(final_state.get("ready_for_followup", False)),
+            }
             pending_ids: list[str] = []
             if isinstance(internal_checklist, list):
                 for item in internal_checklist:
@@ -100,11 +115,43 @@ class DevService:
             updated_handoff["pending_tasks"] = [x for x in pending_ids if x]
             if handoff_writer is not None:
                 handoff_writer.write_latest(updated_handoff)
+        if session_store is not None and str(final_state.get("session_id", "")).strip():
+            session_store.append_run_entry(
+                session_id=str(final_state.get("session_id", "")).strip(),
+                request_id=effective_request_id,
+                parent_request_id=str(final_state.get("parent_request_id", "")).strip(),
+                iteration_index=int(final_state.get("iteration_index", 0) or 0),
+                trigger_type=str(final_state.get("trigger_type", "initial")).strip() or "initial",
+                user_delta_requirement=str(final_state.get("delta_requirement", "")).strip(),
+                final_status=str(final_state.get("status", "unknown")),
+                summary=str(final_state.get("final_summary", "")).strip(),
+                touched_paths=[
+                    str(x)
+                    for x in final_state.get("touched_paths", [])
+                    if isinstance(x, str) and str(x).strip()
+                ],
+                pending_tasks=(
+                    [str(x) for x in final_state.get("pending_tasks", []) if str(x).strip()]
+                    if isinstance(final_state.get("pending_tasks"), list)
+                    else []
+                ),
+                continuation_reason=str(final_state.get("continuation_reason", "")).strip(),
+                prior_run_summary=str(final_state.get("prior_run_summary", "")).strip(),
+                carry_forward_memory=bool(final_state.get("carry_forward_memory", True)),
+                workspace_snapshot_hash=str(
+                    (handoff or {}).get("workspace_snapshot_hash", "") if isinstance(handoff, dict) else ""
+                ).strip(),
+            )
 
         return {
             "branch_name": None,
             "build_logs": build_logs,
             "status": str(final_state.get("status", "unknown")),
+            "continuation_eligible": bool(final_state.get("continuation_eligible", False)),
+            "ready_for_followup": bool(final_state.get("ready_for_followup", False)),
+            "continuation_reason": str(final_state.get("continuation_reason", "")).strip(),
+            "final_summary": str(final_state.get("final_summary", "")).strip(),
+            "session_id": str(final_state.get("session_id", "")).strip(),
         }
 
     def _persist_run_artifacts(
@@ -129,6 +176,11 @@ class DevService:
             "checklist_cursor": final_state.get("checklist_cursor", ""),
             "checklist_items": final_state.get("internal_checklist", []),
             "final_summary": final_state.get("final_summary", ""),
+            "session_id": str(final_state.get("session_id", "")).strip(),
+            "iteration_index": int(final_state.get("iteration_index", 0) or 0),
+            "continuation_eligible": bool(final_state.get("continuation_eligible", False)),
+            "ready_for_followup": bool(final_state.get("ready_for_followup", False)),
+            "continuation_reason": str(final_state.get("continuation_reason", "")).strip(),
         }
         metrics = {
             "target_resolution_success_rate": _compute_target_resolution_success_rate(final_state),
@@ -156,6 +208,20 @@ class DevService:
                 json.dump(cognition if isinstance(cognition, dict) else {}, fh, indent=2)
             with open(os.path.join(run_dir, "metrics.json"), "w", encoding="utf-8") as fh:
                 json.dump(metrics, fh, indent=2)
+            with open(os.path.join(run_dir, "session_summary.json"), "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "session_id": str(final_state.get("session_id", "")).strip(),
+                        "request_id": request_id,
+                        "iteration_index": int(final_state.get("iteration_index", 0) or 0),
+                        "status": str(final_state.get("status", "unknown")),
+                        "continuation_eligible": bool(final_state.get("continuation_eligible", False)),
+                        "ready_for_followup": bool(final_state.get("ready_for_followup", False)),
+                        "continuation_reason": str(final_state.get("continuation_reason", "")).strip(),
+                    },
+                    fh,
+                    indent=2,
+                )
         except Exception:
             # Artifact persistence should never fail the execution path.
             pass

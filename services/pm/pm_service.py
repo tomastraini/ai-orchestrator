@@ -351,6 +351,7 @@ def create_plan(
     preselected_project_ref: Optional[Dict[str, str]] = None,
     max_model_calls_per_run: int = 4,
     handoff_writer: Optional[HandoffWriter] = None,
+    continuation_context: Optional[Dict[str, Any]] = None,
 ) -> PlanJSON:
     """
     PM brain with clarification loop (max_rounds) and strict plan output validation.
@@ -366,6 +367,31 @@ def create_plan(
         context_store = PMContextStore(repo_root=repo_root)
 
     context = context_store.load_context(request_id=request_id, original_requirement=requirement)
+    continuation = continuation_context if isinstance(continuation_context, dict) else {}
+    immutable_constraints = [
+        str(x).strip().lower()
+        for x in continuation.get("immutable_constraints", [])
+        if str(x).strip()
+    ]
+    requirement_low = requirement.strip().lower()
+    if immutable_constraints:
+        contradictory = [
+            c
+            for c in immutable_constraints
+            if c.startswith("no ")
+            and c[3:]
+            and (c[3:] in requirement_low)
+            and ("without " + c[3:]) not in requirement_low
+        ]
+        if contradictory and ask_user is not None:
+            question = (
+                "Your follow-up may conflict with prior constraints: "
+                + ", ".join(contradictory[:3])
+                + ". Should PM keep those constraints? (yes/no)"
+            )
+            answer = ask_user(question, 1, max_rounds).strip().lower()
+            if answer in {"", "y", "yes", "true"}:
+                requirement = f"{requirement}\nHonor prior immutable constraints: {', '.join(contradictory)}"
     existing_rounds_raw = context.get("rounds", [])
     rounds: List[Dict[str, str]] = []
     if isinstance(existing_rounds_raw, list):
@@ -387,6 +413,13 @@ def create_plan(
 
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     workspace_context = scan_workspace_context(repo_root, file_limit=500)
+    if continuation:
+        workspace_context["continuation_context"] = {
+            "session_id": str(continuation.get("session_id", "")).strip(),
+            "iteration_index": int(continuation.get("iteration_index", 0) or 0),
+            "prior_run_summary": str(continuation.get("prior_run_summary", "")).strip(),
+            "delta_requirement": str(continuation.get("delta_requirement", "")).strip(),
+        }
     candidate_files = rank_candidate_files(requirement, workspace_context.get("sampled_files", []), top_k=80)
     workspace_context["ranked_prompt_candidates"] = candidate_files
 
@@ -520,6 +553,19 @@ def create_plan(
 
         context_store.save_final_plan(request_id=request_id, plan=plan)
         handoff = build_dev_handoff(request_id=request_id, plan=plan, rounds=rounds)
+        if continuation:
+            handoff["continuation"] = {
+                "session_id": str(continuation.get("session_id", "")).strip(),
+                "parent_request_id": str(continuation.get("parent_request_id", "")).strip(),
+                "iteration_index": int(continuation.get("iteration_index", 0) or 0),
+                "continuation_reason": str(continuation.get("continuation_reason", "improvement")).strip()
+                or "improvement",
+                "delta_requirement": str(continuation.get("delta_requirement", "")).strip(),
+                "prior_run_summary": str(continuation.get("prior_run_summary", "")).strip(),
+                "carry_forward_memory": bool(continuation.get("carry_forward_memory", True)),
+                "trigger_type": str(continuation.get("trigger_type", "improvement")).strip() or "improvement",
+                "continuation_mode": str(continuation.get("continuation_mode", "off")).strip() or "off",
+            }
         context_store.save_dev_handoff(request_id=request_id, handoff=handoff)
         if handoff_writer is not None:
             handoff_writer.write_latest(handoff)
