@@ -6,7 +6,6 @@ import os
 import platform
 import re
 import time
-import difflib
 from dataclasses import asdict
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -19,12 +18,14 @@ from services.dev.phases.dev_preflight_planning import run as dev_preflight_plan
 from services.dev.phases.execute_bootstrap_phase import run as execute_bootstrap_phase
 from services.dev.phases.execute_final_compile_gate import run as execute_final_compile_gate
 from services.dev.phases.execute_implementation_phase import run as execute_implementation_phase
+from services.dev.phases.execute_implementation_target import run as execute_implementation_target
 from services.dev.phases.execute_validation_phase import run as execute_validation_phase
 from services.dev.phases.finalize_result import run as finalize_result_phase
 from services.dev.phases.ingest_pm_plan import run as ingest_pm_plan_phase
 from services.dev.phases.prepare_execution_steps import run as prepare_execution_steps_phase
 from services.dev.types.dev_graph_state import DevGraphState
-from services.workspace.project_index import detect_stack_from_markers, rank_candidate_files, scan_workspace_context
+from services.dev.edit_primitives import patch_region
+from services.workspace.project_index import build_cognition_index, detect_stack_from_markers, rank_candidate_files, scan_workspace_context
 from shared.dev_schemas import DevChecklistItem, DevTask, derive_project_name
 
 
@@ -134,6 +135,11 @@ class DevMasterGraph:
             "dev_discovery_candidates": [],
             "dev_technical_plan": {},
             "dev_plan_approved": False,
+            "repository_memory": (
+                dict(handoff.get("memory", {}))
+                if isinstance(handoff, dict) and isinstance(handoff.get("memory"), dict)
+                else {"attempted_commands": [], "errors": [], "touched_paths": []}
+            ),
             "checklist_cursor": "",
             "llm_calls_used": 0,
             "llm_call_budget": max(0, int(max_model_calls_per_run)),
@@ -805,6 +811,7 @@ class DevMasterGraph:
                 "by_basename": by_basename,
                 "by_basename_casefold": by_basename_casefold,
                 "by_suffix_casefold": by_suffix_casefold,
+                "cognition": {"version": "1.0", "active_root": active_root, "file_count": 0, "symbol_index": {"files": [], "by_name": {}}, "entrypoints": []},
             }
         for root, dirs, names in os.walk(active_root):
             dirs[:] = [d for d in dirs if d not in DevMasterGraph.INDEX_IGNORE_DIRS]
@@ -820,12 +827,14 @@ class DevMasterGraph:
                     suffix = "/".join(suffixes[idx:]).casefold()
                     if suffix and suffix not in by_suffix_casefold:
                         by_suffix_casefold[suffix] = rel
+        cognition = build_cognition_index(active_root, files)
         return {
             "active_root": active_root,
             "files": files,
             "by_basename": by_basename,
             "by_basename_casefold": by_basename_casefold,
             "by_suffix_casefold": by_suffix_casefold,
+            "cognition": cognition,
         }
 
     @staticmethod
@@ -1510,7 +1519,8 @@ class DevMasterGraph:
             existing_content=original,
         )
 
-        if new_content != original:
+        patched_content, changed = patch_region(original, new_content)
+        if changed:
             low_signal = new_content.strip().casefold() in {
                 original.strip().casefold(),
                 f"// {details}".strip().casefold(),
@@ -1519,7 +1529,7 @@ class DevMasterGraph:
             if low_signal:
                 return "low_signal_update_rejected", "comment_or_noop_like_update", safe_target
             with open(safe_target, "w", encoding="utf-8") as fh:
-                fh.write(new_content)
+                fh.write(patched_content)
             return "updated_file", "generated_update", safe_target
 
         if os.path.getsize(safe_target) == 0:
@@ -1608,127 +1618,21 @@ class DevMasterGraph:
                 )
                 pass_actions = 0
                 for idx, target in pending_targets:
-                    expected = str(target.get("expected_path_hint", ""))
-                    modification_type = str(target.get("modification_type", "")).lower()
-                    creation_policy = str(target.get("creation_policy", "")).strip().lower() or (
-                        "must_exist" if modification_type in {"update", "replace", "modify", "patch", "verify"} else "create_if_missing"
-                    )
-                    details = str(target.get("details", "")).strip()
-                    raw_file_name = str(target.get("file_name", "")).strip()
-                    file_name = os.path.basename(raw_file_name.replace("\\", "/")) if raw_file_name else os.path.basename(expected)
                     file_index = DevMasterGraph._refresh_active_root_index(
                         state,
                         category="implementation_index_refresh",
                     )
-                    safe_target = DevMasterGraph._resolve_target_file_path(
+                    action, _resolved_target = execute_implementation_target(
+                        state=state,
+                        graph_cls=DevMasterGraph,
+                        idx=idx,
+                        target=target,
+                        pass_index=pass_index,
                         scope_root=scope_root,
                         project_root=project_root,
-                        active_project_root=active_root,
-                        expected_path_hint=expected,
-                        file_name=file_name,
-                    )
-                    key = f"todo_impl_{idx}"
-                    if key not in target_proofs:
-                        target_proofs[key] = {"before_hash": DevMasterGraph._file_sha1(safe_target), "after_hash": ""}
-                    before_text = ""
-                    if os.path.exists(safe_target) and os.path.isfile(safe_target):
-                        try:
-                            with open(safe_target, "r", encoding="utf-8", errors="ignore") as fh:
-                                before_text = fh.read()
-                        except Exception:
-                            before_text = ""
-                    action, action_note, resolved_target = DevMasterGraph._apply_target_in_pass(
-                        state=state,
-                        safe_target=safe_target,
-                        file_name=file_name,
                         active_root=active_root,
-                        modification_type=modification_type,
-                        details=details,
-                        pass_index=pass_index,
-                        expected_path_hint=expected,
-                        creation_policy=creation_policy,
                         file_index=file_index,
-                    )
-                    if action == "path_type_mismatch":
-                        recovered_target = os.path.join(resolved_target, file_name) if file_name else resolved_target
-                        DevMasterGraph._emit(
-                            state,
-                            f"[IMPLEMENTATION_RECOVERY] pass={pass_index} reason={action_note} "
-                            f"old_target={resolved_target} new_target={recovered_target}",
-                        )
-                        action, action_note, resolved_target = DevMasterGraph._apply_target_in_pass(
-                            state=state,
-                            safe_target=recovered_target,
-                            file_name=file_name,
-                            active_root=active_root,
-                            modification_type=modification_type,
-                            details=details,
-                            pass_index=pass_index,
-                            expected_path_hint=expected,
-                            creation_policy=creation_policy,
-                            file_index=file_index,
-                        )
-                    if action == "missing_expected_file":
-                        discovered = DevMasterGraph._discover_existing_path(
-                            active_root,
-                            expected,
-                            file_name,
-                            project_root=project_root,
-                            file_index=file_index,
-                        )
-                        if not discovered:
-                            raise RuntimeError(f"Expected target missing and discovery failed: {expected}")
-                        DevMasterGraph._emit(
-                            state,
-                            f"[IMPLEMENTATION_RECOVERY] pass={pass_index} reason=discovered_target "
-                            f"old_target={resolved_target} new_target={discovered}",
-                        )
-                        action, action_note, resolved_target = DevMasterGraph._apply_target_in_pass(
-                            state=state,
-                            safe_target=discovered,
-                            file_name=file_name,
-                            active_root=active_root,
-                            modification_type=modification_type,
-                            details=details,
-                            pass_index=pass_index,
-                            expected_path_hint=expected,
-                            creation_policy=creation_policy,
-                            file_index=file_index,
-                        )
-                        if action == "missing_expected_file":
-                            raise RuntimeError(f"Expected target missing and discovery failed: {expected}")
-                    if action == "low_signal_update_rejected":
-                        raise RuntimeError(f"Low-signal update rejected for {resolved_target}")
-                    target_proofs[key]["after_hash"] = DevMasterGraph._file_sha1(resolved_target)
-                    state["touched_paths"].append(resolved_target)
-                    after_text = ""
-                    if os.path.exists(resolved_target) and os.path.isfile(resolved_target):
-                        try:
-                            with open(resolved_target, "r", encoding="utf-8", errors="ignore") as fh:
-                                after_text = fh.read()
-                        except Exception:
-                            after_text = ""
-                    diff_preview = "".join(
-                        difflib.unified_diff(
-                            before_text.splitlines(keepends=True)[:80],
-                            after_text.splitlines(keepends=True)[:80],
-                            lineterm="",
-                        )
-                    )
-                    DevMasterGraph._emit_event(
-                        state,
-                        "file_mutation",
-                        pass_index=pass_index,
-                        action=action,
-                        action_note=action_note,
-                        path=DevMasterGraph._relpath_safe(state, resolved_target),
-                        before_size=len(before_text.encode("utf-8")),
-                        after_size=len(after_text.encode("utf-8")),
-                        diff_preview=DevMasterGraph._sanitize_text(diff_preview, 800),
-                    )
-                    DevMasterGraph._emit(
-                        state,
-                        f"[IMPLEMENTATION] pass={pass_index} action={action} target={resolved_target} note={action_note}"
+                        target_proofs=target_proofs,
                     )
                     pass_actions += 1
                     total_actions += 1

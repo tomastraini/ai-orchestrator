@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 
-from services.pm_context_store import PMContextStore
+from services.pm.pm_context_store import PMContextStore
 
 
 class PMContextStoreTests(unittest.TestCase):

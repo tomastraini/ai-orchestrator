@@ -4,7 +4,7 @@ import tempfile
 import unittest
 import os
 
-from services.dev_master_graph import DevMasterGraph
+from services.dev.dev_master_graph import DevMasterGraph
 
 
 class DevPreflightPlanningTests(unittest.TestCase):

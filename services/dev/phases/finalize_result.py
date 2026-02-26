@@ -34,6 +34,24 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
         f"pass_status={state.get('implementation_pass_statuses', [])} "
         f"checklist={checklist_completed}/{checklist_total}"
     )
+    memory = state.get("repository_memory", {}) if isinstance(state.get("repository_memory"), dict) else {}
+    attempted = memory.get("attempted_commands", [])
+    known_errors = memory.get("errors", [])
+    touched = memory.get("touched_paths", [])
+    if not isinstance(attempted, list):
+        attempted = []
+    if not isinstance(known_errors, list):
+        known_errors = []
+    if not isinstance(touched, list):
+        touched = []
+    attempted.extend([str(outcome.get("command", "")) for outcome in state.get("task_outcomes", []) if isinstance(outcome, dict)])
+    known_errors.extend([str(err) for err in state.get("errors", [])])
+    touched.extend([str(path) for path in state.get("touched_paths", [])])
+    state["repository_memory"] = {
+        "attempted_commands": attempted[-200:],
+        "errors": known_errors[-200:],
+        "touched_paths": touched[-500:],
+    }
     graph_cls._emit_event(
         state,
         "final_summary",
@@ -44,6 +62,11 @@ def run(state: DevGraphState, graph_cls: type) -> DevGraphState:
         phase_status=state.get("phase_status", {}),
         implementation_passes=state.get("implementation_pass_statuses", []),
         task_outcomes=len(state.get("task_outcomes", [])),
+        memory_stats={
+            "attempted_commands": len(state["repository_memory"].get("attempted_commands", [])),
+            "errors": len(state["repository_memory"].get("errors", [])),
+            "touched_paths": len(state["repository_memory"].get("touched_paths", [])),
+        },
     )
     graph_cls._emit(state, f"[FINAL] {state['final_summary']}")
     state["phase_status"]["finalize_result"] = "completed"

@@ -7,13 +7,14 @@ import uuid
 from typing import Any, Dict
 
 from services.dev.handoffpack_reader import load_handoff_with_fallback
-from services.dev_service import DevService
+from services.dev.dev_service import DevService
+from services.pm.dev_handoff_store import DevHandoffStore
 from services.pm.project_resolver import (
     is_vague_existing_project_request,
     resolve_project_candidates,
 )
-from services.pm_context_store import PMContextStore
-from services.pm_service import PMServiceError, create_plan
+from services.pm.pm_context_store import PMContextStore
+from services.pm.pm_service import PMServiceError, create_plan
 from shared.state import PipelineState
 
 
@@ -117,6 +118,7 @@ def run(requirement: str, *, mode: str = "full", from_latest: bool = False) -> i
                 ask_user=_ask_clarification,
                 max_rounds=3,
                 preselected_project_ref=preselected_project_ref,
+                handoff_writer=DevHandoffStore(repo_root=repo_root),
             )
         except PMServiceError as e:
             print(f"[PM ERROR] {e}")
@@ -163,6 +165,8 @@ def run(requirement: str, *, mode: str = "full", from_latest: bool = False) -> i
         ask_user=_ask_dev_clarification,
         handoff=loaded_handoff if isinstance(loaded_handoff, dict) else None,
         log_sink=_live_log_sink if live_stream_enabled else None,
+        handoff_writer=DevHandoffStore(repo_root=repo_root),
+        run_artifacts_root=os.path.join(repo_root, ".orchestrator", "runs"),
     )
 
     state.branch_name = result.get("branch_name")

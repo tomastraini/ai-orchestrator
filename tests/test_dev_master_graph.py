@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from services.dev_master_graph import DevMasterGraph
+from services.dev.dev_master_graph import DevMasterGraph
 
 
 class DevMasterGraphTests(unittest.TestCase):

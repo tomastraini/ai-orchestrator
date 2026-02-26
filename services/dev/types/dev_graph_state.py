@@ -52,4 +52,5 @@ class DevGraphState(TypedDict, total=False):
     dev_discovery_candidates: List[Dict[str, Any]]
     dev_technical_plan: Dict[str, Any]
     dev_plan_approved: bool
+    repository_memory: Dict[str, Any]
 

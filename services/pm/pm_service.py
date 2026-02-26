@@ -7,9 +7,10 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 from config import client
-from services.pm.dev_handoff_store import DevHandoffStore, build_dev_handoff
+from services.pm.dev_handoff_store import build_dev_handoff
 from services.pm.pm_context_store import PMContextStore
 from services.workspace.project_index import rank_candidate_files, scan_workspace_context
+from shared.handoff_ports import HandoffWriter
 from shared.pathing import canonical_projects_path
 from shared.schemas import PlanJSON, validate_plan_json
 
@@ -362,6 +363,7 @@ def create_plan(
     max_rounds: int = 3,
     preselected_project_ref: Optional[Dict[str, str]] = None,
     max_model_calls_per_run: int = 4,
+    handoff_writer: Optional[HandoffWriter] = None,
 ) -> PlanJSON:
     """
     PM brain with clarification loop (max_rounds) and strict plan output validation.
@@ -507,7 +509,8 @@ def create_plan(
         context_store.save_final_plan(request_id=request_id, plan=plan)
         handoff = build_dev_handoff(request_id=request_id, plan=plan, rounds=rounds)
         context_store.save_dev_handoff(request_id=request_id, handoff=handoff)
-        DevHandoffStore(repo_root=repo_root).write_latest(handoff)
+        if handoff_writer is not None:
+            handoff_writer.write_latest(handoff)
         return plan
 
     raise PMServiceError("PM did not return a final plan within allowed clarification rounds.")

@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 
-from services.dev_master_graph import DevMasterGraph
+from services.dev.dev_master_graph import DevMasterGraph
 
 
 class ValidationGateByStackTests(unittest.TestCase):

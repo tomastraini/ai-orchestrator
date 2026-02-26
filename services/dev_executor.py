@@ -1,3 +1,13 @@
+from __future__ import annotations
+
+import warnings
+
+warnings.warn(
+    "services.dev_executor is deprecated; use services.dev.dev_executor instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 from services.dev.dev_executor import (
     DevExecutorError,
     classify_failure,
