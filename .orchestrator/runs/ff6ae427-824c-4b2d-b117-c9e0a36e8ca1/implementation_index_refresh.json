@@ -1,0 +1,150 @@
+{
+  "generated_at": "2026-02-26T18:37:49.308876+00:00",
+  "phase": "implementation_index_refresh",
+  "cognition": {
+    "version": "2.0",
+    "generated_at": "2026-02-26T18:37:49.308640+00:00",
+    "project_root": "home/vboxuser/Documents/repositories/ai-orchestrator/projects/findawordproject",
+    "workspace_hash": "7b16bd36b0c0ec26cc6d7a2450b4956da4cef57e",
+    "provider_capabilities": {
+      "tree_sitter": false,
+      "tree_sitter_languages": false,
+      "libcst": false,
+      "networkx": false,
+      "yaml": true,
+      "orjson": true
+    },
+    "active_root": "home/vboxuser/Documents/repositories/ai-orchestrator/projects/findawordproject",
+    "file_count": 3,
+    "files": [
+      {
+        "path": "tsconfig.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "package-lock.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "package.json",
+        "kind": "config",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      }
+    ],
+    "symbol_index": {
+      "files": [],
+      "by_name": {}
+    },
+    "graph": {
+      "nodes": [
+        "tsconfig.json",
+        "package-lock.json",
+        "package.json"
+      ],
+      "edges": []
+    },
+    "dependency_graph": {
+      "dependencies": [
+        {
+          "name": "react",
+          "version": "^18.2.0",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "react-dom",
+          "version": "^18.2.0",
+          "source": "npm",
+          "scope": "dependencies"
+        },
+        {
+          "name": "@vitejs/plugin-react",
+          "version": "^3.1.0",
+          "source": "npm",
+          "scope": "devDependencies"
+        },
+        {
+          "name": "typescript",
+          "version": "^4.9.4",
+          "source": "npm",
+          "scope": "devDependencies"
+        },
+        {
+          "name": "vite",
+          "version": "^4.3.9",
+          "source": "npm",
+          "scope": "devDependencies"
+        },
+        {
+          "name": "@types/react",
+          "version": "^18.0.27",
+          "source": "npm",
+          "scope": "devDependencies"
+        },
+        {
+          "name": "@types/react-dom",
+          "version": "^18.0.10",
+          "source": "npm",
+          "scope": "devDependencies"
+        }
+      ]
+    },
+    "entrypoints": [],
+    "entrypoint_aliases": {},
+    "tests": [],
+    "test_mappings": [],
+    "configs": [
+      "package.json",
+      "tsconfig.json"
+    ],
+    "toolchain": [
+      {
+        "name": "node",
+        "confidence": 0.9
+      }
+    ],
+    "path_aliases": {},
+    "architecture_signals": [
+      {
+        "name": "unknown",
+        "confidence": 0.4
+      }
+    ],
+    "resolution_hints": {
+      "by_basename": {
+        "tsconfig.json": [
+          "tsconfig.json"
+        ],
+        "package-lock.json": [
+          "package-lock.json"
+        ],
+        "package.json": [
+          "package.json"
+        ]
+      },
+      "entrypoint_candidates": [],
+      "entrypoint_aliases": {},
+      "ai_ranked_candidates": []
+    }
+  }
+}

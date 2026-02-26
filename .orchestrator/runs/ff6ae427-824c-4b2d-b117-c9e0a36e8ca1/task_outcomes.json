@@ -1,0 +1,35 @@
+[
+  {
+    "task_id": "handoff_1",
+    "status": "completed",
+    "command": "npm create vite@latest . -- --template react-ts",
+    "cwd": "/home/vboxuser/Documents/repositories/ai-orchestrator/projects",
+    "category": "none",
+    "exit_code": 0,
+    "elapsed_ms": 844,
+    "run_mode": "terminating",
+    "evidence": {
+      "attempts": 1,
+      "smoke_ready": false
+    },
+    "stdout_excerpt": "> npx\n> create-vite . --template react-ts\n\u2514  Operation cancelled",
+    "stderr_excerpt": ""
+  },
+  {
+    "task_id": "handoff_2",
+    "status": "pending_llm",
+    "command": "npm install",
+    "cwd": "/home/vboxuser/Documents/repositories/ai-orchestrator/projects/findawordproject",
+    "category": "path_issue",
+    "exit_code": 254,
+    "elapsed_ms": 471,
+    "run_mode": "terminating",
+    "evidence": {
+      "attempted_commands": [
+        "npm install"
+      ]
+    },
+    "stdout_excerpt": "",
+    "stderr_excerpt": "npm error code ENOENT\nnpm error syscall open\nnpm error path /home/vboxuser/Documents/repositories/ai-orchestrator/projects/findawordproject/package.json\nnpm error errno -2\nnpm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open '/home/vboxuser/Documents/repositories/ai-orchestrator/projects/findawordproject/package.json'\nnpm error enoent This is related to npm not being able to find a file.\nnpm error enoent\nnpm error A complete log of this run can be found in: /home/vboxuser/.npm/_logs/2026-02-26T18_37_27_076Z-debug-0.log"
+  }
+]
