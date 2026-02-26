@@ -1,24 +1,29 @@
 schema: HandoffPackYAML/v1
 meta:
-  request_id: 5650cfc6-4a61-4fca-8e6f-7c8d6e614c3c
-  generated_at: '2026-02-26T13:19:12.870404+00:00'
+  request_id: dad281de-c182-4778-88d8-66b3f028b76f
+  generated_at: '2026-02-26T13:55:57.965454+00:00'
 goal:
   constraints:
-  - Frontend must fetch weather data directly from a public API (no backend proxy)
-  - Use Angular CLI for project scaffolding
-  - Store API key in environment.ts and exclude it from version control
+  - "Must be a client\u2011only React+TS SPA; no backend proxy"
+  - Use public time API endpoints without custom CORS workarounds
+  - Keep dependencies minimal (no Redux or heavy state libraries)
+  - Use functional components and React Hooks only
+  - 'Follow repository conventions: root at projects/time-app'
+  - "Ensure cross\u2011platform compatibility (Windows/macOS/Linux)"
   validation:
-  - Run ng serve and verify the app starts without errors
-  - Enter a city name or allow geolocation and confirm weather data displays correctly
-  - Verify HttpClient requests succeed and responses are parsed into the UI
+  - '`npm run dev` starts successfully and app loads in browser'
+  - "The app displays live\u2011updating times for three cities"
+  - No TypeScript compilation errors (`npm run build` succeeds)
+  - '`npm run lint` yields no linting errors'
+  - README.md instructions execute successfully
 workspace:
-  project_root: projects/weather-app
+  project_root: projects/time-app
   workspace_context:
     projects_root: projects
     projects: []
   path_aliases:
-    project_root: projects/weather-app
-    project_name: weather-app
+    project_root: projects/time-app
+    project_name: time-app
 roles:
   pm_checklist:
     project_scope: new_project
@@ -26,25 +31,30 @@ roles:
     backend_required: 'yes'
     database_required: 'no'
   clarifications:
-  - question: Do you prefer the Angular frontend to fetch weather data directly from
-      a public API (e.g., OpenWeatherMap), or should we implement a backend service
-      to proxy the API requests?
-    answer: Yes, angular frontend should fetch the data directly form an api
-  - question: "We\u2019re planning to create a new Angular project in a directory\
-      \ like\_projects/weather-app; does that name work for you, or would you prefer\
-      \ a different project directory name?"
-    answer: Yes go for it
+  - question: For the new React+TypeScript time app, what project name/path would
+      you like (e.g., 'time-app' under projects/) and should it fetch from the public
+      API directly in the client or include a backend proxy?
+    answer: fetch it from the front-end and time-app is ok for a name
 execution:
   steps:
-  - cwd: projects/weather-app
-    command: npx @angular/cli new weather-app --directory . --routing=true --style=css
-      --skip-install
-    purpose: Scaffold a new Angular application without installing dependencies
-  - cwd: projects/weather-app
+  - cwd: projects
+    command: npm create vite@latest time-app -- --template react-ts
+    purpose: "Bootstrap a new React+TypeScript project using Vite in non\u2011interactive\
+      \ mode"
+  - cwd: projects/time-app
     command: npm install
-    purpose: Install Angular and project dependencies
+    purpose: Install project dependencies
+  - cwd: projects/time-app
+    command: npm run dev
+    purpose: Start the development server for local testing
   structure_plan:
-  - path: projects
+  - path: projects/time-app
+    kind: required
+  - path: projects/time-app/src/components
+    kind: required
+  - path: projects/time-app/src
+    kind: required
+  - path: projects/time-app/public
     kind: required
   command_policy:
     risk_confirmation: true
@@ -53,7 +63,8 @@ execution:
   - id: todo_handoff_1
     kind: bootstrap
     status: completed
-    description: Scaffold a new Angular application without installing dependencies
+    description: "Bootstrap a new React+TypeScript project using Vite in non\u2011\
+      interactive mode"
     task_ref: handoff_1
     target_ref: null
     depends_on: []
@@ -66,12 +77,11 @@ execution:
     - &id001
       task_id: handoff_1
       status: completed
-      command: npx --yes @angular/cli new weather-app --directory . --routing=true
-        --style=css --skip-install
-      cwd: /home/vboxuser/Documents/repositories/ai-orchestrator/projects/weather-app
-      category: none
+      command: npm create vite@latest time-app -- --template react-ts
+      cwd: /home/vboxuser/Documents/repositories/ai-orchestrator/projects
+      category: package_manager_mismatch
       exit_code: 0
-      elapsed_ms: 168722
+      elapsed_ms: 1400
       run_mode: terminating
       evidence:
         attempts: 1
@@ -79,7 +89,7 @@ execution:
   - id: todo_handoff_2
     kind: bootstrap
     status: completed
-    description: Install Angular and project dependencies
+    description: Install project dependencies
     task_ref: handoff_2
     target_ref: null
     depends_on: []
@@ -93,20 +103,45 @@ execution:
       task_id: handoff_2
       status: completed
       command: npm install
-      cwd: /home/vboxuser/Documents/repositories/ai-orchestrator/projects/weather-app
+      cwd: /home/vboxuser/Documents/repositories/ai-orchestrator/projects/time-app
       category: package_manager_mismatch
       exit_code: 0
-      elapsed_ms: 202612
+      elapsed_ms: 105912
       run_mode: terminating
       evidence:
         attempts: 1
         smoke_ready: false
+  - id: todo_handoff_3
+    kind: bootstrap
+    status: completed
+    description: Start the development server for local testing
+    task_ref: handoff_3
+    target_ref: null
+    depends_on: []
+    success_criteria:
+    - command exits with code 0
+    mandatory: true
+    evidence:
+    - phase: bootstrap
+      task_id: handoff_3
+    - &id003
+      task_id: handoff_3
+      status: completed
+      command: npm run dev
+      cwd: /home/vboxuser/Documents/repositories/ai-orchestrator/projects/time-app
+      category: none
+      exit_code: 0
+      elapsed_ms: 2341
+      run_mode: service_smoke
+      evidence:
+        attempts: 1
+        smoke_ready: true
   - id: todo_impl_1
     kind: implementation
     status: failed
-    description: implement angular.json
+    description: implement package.json
     task_ref: null
-    target_ref: projects/weather-app
+    target_ref: projects/time-app/package.json
     depends_on: []
     success_criteria:
     - target file mutated with evidence
@@ -115,13 +150,13 @@ execution:
     - phase: implementation
       pass: 0
     - phase: implementation
-      error: 'Expected target missing and discovery failed: projects/weather-app'
+      error: 'Expected target missing and discovery failed: projects/time-app/src/index.tsx'
   - id: todo_impl_2
     kind: implementation
     status: failed
-    description: implement src/app/app.module.ts
+    description: implement tsconfig.json
     task_ref: null
-    target_ref: projects/weather-app
+    target_ref: projects/time-app/tsconfig.json
     depends_on: []
     success_criteria:
     - target file mutated with evidence
@@ -130,13 +165,13 @@ execution:
     - phase: implementation
       pass: 0
     - phase: implementation
-      error: 'Expected target missing and discovery failed: projects/weather-app'
+      error: 'Expected target missing and discovery failed: projects/time-app/src/index.tsx'
   - id: todo_impl_3
     kind: implementation
     status: failed
-    description: implement src/app/weather.service.ts
+    description: implement vite.config.ts
     task_ref: null
-    target_ref: projects/weather-app
+    target_ref: projects/time-app/vite.config.ts
     depends_on: []
     success_criteria:
     - target file mutated with evidence
@@ -145,13 +180,13 @@ execution:
     - phase: implementation
       pass: 0
     - phase: implementation
-      error: 'Expected target missing and discovery failed: projects/weather-app'
+      error: 'Expected target missing and discovery failed: projects/time-app/src/index.tsx'
   - id: todo_impl_4
     kind: implementation
     status: failed
-    description: implement src/app/weather.component.ts
+    description: implement src/components/WorldClock.tsx
     task_ref: null
-    target_ref: projects/weather-app
+    target_ref: projects/time-app/src/components/WorldClock.tsx
     depends_on: []
     success_criteria:
     - target file mutated with evidence
@@ -160,13 +195,13 @@ execution:
     - phase: implementation
       pass: 0
     - phase: implementation
-      error: 'Expected target missing and discovery failed: projects/weather-app'
+      error: 'Expected target missing and discovery failed: projects/time-app/src/index.tsx'
   - id: todo_impl_5
     kind: implementation
     status: failed
-    description: implement src/app/weather.component.html
+    description: implement src/App.tsx
     task_ref: null
-    target_ref: projects/weather-app
+    target_ref: projects/time-app/src/App.tsx
     depends_on: []
     success_criteria:
     - target file mutated with evidence
@@ -175,13 +210,13 @@ execution:
     - phase: implementation
       pass: 0
     - phase: implementation
-      error: 'Expected target missing and discovery failed: projects/weather-app'
+      error: 'Expected target missing and discovery failed: projects/time-app/src/index.tsx'
   - id: todo_impl_6
     kind: implementation
     status: failed
-    description: implement src/environments/environment.ts
+    description: implement src/index.tsx
     task_ref: null
-    target_ref: projects/weather-app
+    target_ref: projects/time-app/src/index.tsx
     depends_on: []
     success_criteria:
     - target file mutated with evidence
@@ -190,7 +225,85 @@ execution:
     - phase: implementation
       pass: 0
     - phase: implementation
-      error: 'Expected target missing and discovery failed: projects/weather-app'
+      error: 'Expected target missing and discovery failed: projects/time-app/src/index.tsx'
+  - id: todo_impl_7
+    kind: implementation
+    status: failed
+    description: implement .gitignore
+    task_ref: null
+    target_ref: projects/time-app/.gitignore
+    depends_on: []
+    success_criteria:
+    - target file mutated with evidence
+    mandatory: true
+    evidence:
+    - phase: implementation
+      pass: 0
+    - phase: implementation
+      error: 'Expected target missing and discovery failed: projects/time-app/src/index.tsx'
+  - id: todo_impl_8
+    kind: implementation
+    status: failed
+    description: implement public/index.html
+    task_ref: null
+    target_ref: projects/time-app/public/index.html
+    depends_on: []
+    success_criteria:
+    - target file mutated with evidence
+    mandatory: true
+    evidence:
+    - phase: implementation
+      pass: 0
+    - phase: implementation
+      error: 'Expected target missing and discovery failed: projects/time-app/src/index.tsx'
+  - id: todo_impl_9
+    kind: implementation
+    status: failed
+    description: implement README.md
+    task_ref: null
+    target_ref: projects/time-app/README.md
+    depends_on: []
+    success_criteria:
+    - target file mutated with evidence
+    mandatory: true
+    evidence:
+    - phase: implementation
+      pass: 0
+    - phase: implementation
+      error: 'Expected target missing and discovery failed: projects/time-app/src/index.tsx'
+  - id: todo_validation_cmd_1
+    kind: validation
+    status: pending
+    description: 'run validation command: npm run dev'
+    task_ref: validation_cmd_1
+    target_ref: null
+    depends_on: []
+    success_criteria:
+    - validation task completed
+    mandatory: false
+    evidence: []
+  - id: todo_validation_cmd_2
+    kind: validation
+    status: pending
+    description: 'run validation command: npm run build'
+    task_ref: validation_cmd_2
+    target_ref: null
+    depends_on: []
+    success_criteria:
+    - validation task completed
+    mandatory: false
+    evidence: []
+  - id: todo_validation_cmd_3
+    kind: validation
+    status: pending
+    description: 'run validation command: npm run lint'
+    task_ref: validation_cmd_3
+    target_ref: null
+    depends_on: []
+    success_criteria:
+    - validation task completed
+    mandatory: false
+    evidence: []
   - id: todo_final_compile_1
     kind: final_compile
     status: pending
@@ -200,12 +313,46 @@ execution:
     depends_on:
     - todo_handoff_1
     - todo_handoff_2
+    - todo_handoff_3
     - todo_impl_1
     - todo_impl_2
     - todo_impl_3
     - todo_impl_4
     - todo_impl_5
     - todo_impl_6
+    - todo_impl_7
+    - todo_impl_8
+    - todo_impl_9
+    - todo_validation_cmd_1
+    - todo_validation_cmd_2
+    - todo_validation_cmd_3
+    success_criteria:
+    - compile/build gate command completed
+    mandatory: true
+    evidence: []
+  - id: todo_final_compile_2
+    kind: final_compile
+    status: pending
+    description: 'run final compile gate: npm run lint'
+    task_ref: final_compile_2
+    target_ref: null
+    depends_on:
+    - todo_handoff_1
+    - todo_handoff_2
+    - todo_handoff_3
+    - todo_impl_1
+    - todo_impl_2
+    - todo_impl_3
+    - todo_impl_4
+    - todo_impl_5
+    - todo_impl_6
+    - todo_impl_7
+    - todo_impl_8
+    - todo_impl_9
+    - todo_validation_cmd_1
+    - todo_validation_cmd_2
+    - todo_validation_cmd_3
+    - todo_final_compile_1
     success_criteria:
     - compile/build gate command completed
     mandatory: true
@@ -213,8 +360,9 @@ execution:
   task_outcomes:
   - *id001
   - *id002
+  - *id003
 resume:
-  selected_project_root: projects/weather-app
+  selected_project_root: projects/time-app
   workspace_snapshot_hash: 5113450b7a6f16abf9da7e44246526b1d7d1c4ec
   pending_tasks:
   - todo_impl_1
@@ -223,25 +371,37 @@ resume:
   - todo_impl_4
   - todo_impl_5
   - todo_impl_6
+  - todo_impl_7
+  - todo_impl_8
+  - todo_impl_9
+  - todo_validation_cmd_1
+  - todo_validation_cmd_2
+  - todo_validation_cmd_3
   - todo_final_compile_1
+  - todo_final_compile_2
   checkpoints: []
-  checklist_cursor: todo_impl_6
+  checklist_cursor: todo_impl_9
 memory:
   attempted_commands: []
   errors: []
 dev_preflight_plan:
   os: Linux
-  active_project_root: /home/vboxuser/Documents/repositories/ai-orchestrator/projects/weather-app
+  active_project_root: /home/vboxuser/Documents/repositories/ai-orchestrator/projects/time-app
   detected_stacks:
   - node
-  validation_commands: []
+  validation_commands:
+  - npm run dev
+  - npm run build
+  - npm run lint
   final_compile_commands:
   - npm run build
+  - npm run lint
   raw_validation_requirements:
-  - Run ng serve and verify the app starts without errors
-  - Enter a city name or allow geolocation and confirm weather data displays correctly
-  - Verify HttpClient requests succeed and responses are parsed into the UI
+  - '`npm run dev` starts successfully and app loads in browser'
+  - "The app displays live\u2011updating times for three cities"
+  - No TypeScript compilation errors (`npm run build` succeeds)
+  - '`npm run lint` yields no linting errors'
+  - README.md instructions execute successfully
   unresolved_validation_requirements:
-  - Run ng serve and verify the app starts without errors
-  - Enter a city name or allow geolocation and confirm weather data displays correctly
-  - Verify HttpClient requests succeed and responses are parsed into the UI
+  - "The app displays live\u2011updating times for three cities"
+  - README.md instructions execute successfully

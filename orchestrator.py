@@ -6,9 +6,7 @@ import os
 import uuid
 from typing import Any, Dict
 
-python3 -m venv .venv
-source .venv/bin/activate
-export AZURE_OPENAI_KEY=from services.dev.handoffpack_reader import load_handoff_with_fallback
+from services.dev.handoffpack_reader import load_handoff_with_fallback
 from services.dev_service import DevService
 from services.pm.project_resolver import (
     is_vague_existing_project_request,
