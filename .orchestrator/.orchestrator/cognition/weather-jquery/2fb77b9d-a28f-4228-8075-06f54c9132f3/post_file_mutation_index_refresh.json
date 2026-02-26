@@ -1,0 +1,265 @@
+{
+  "generated_at": "2026-02-26T21:02:12.045931+00:00",
+  "phase": "post_file_mutation_index_refresh",
+  "cognition": {
+    "version": "2.0",
+    "generated_at": "2026-02-26T21:02:12.045628+00:00",
+    "project_root": "home/vboxuser/Documents/repositories/ai-orchestrator/projects/weather-jquery",
+    "workspace_hash": "b70bc481f0b626a6419981c5469ef74228fd27f8",
+    "provider_capabilities": {
+      "tree_sitter": false,
+      "tree_sitter_languages": false,
+      "libcst": false,
+      "networkx": false,
+      "yaml": true,
+      "orjson": true
+    },
+    "active_root": "home/vboxuser/Documents/repositories/ai-orchestrator/projects/weather-jquery",
+    "file_count": 4,
+    "files": [
+      {
+        "path": "README.md",
+        "kind": "doc",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      },
+      {
+        "path": "main.js",
+        "kind": "source",
+        "language": "javascript",
+        "symbols": [
+          {
+            "name": "displayTemperature",
+            "kind": "function",
+            "line": 23,
+            "end_line": 23
+          },
+          {
+            "name": "fetchForecast",
+            "kind": "function",
+            "line": 30,
+            "end_line": 30
+          },
+          {
+            "name": "geocodeCity",
+            "kind": "function",
+            "line": 62,
+            "end_line": 62
+          },
+          {
+            "name": "resetMessages",
+            "kind": "function",
+            "line": 8,
+            "end_line": 8
+          },
+          {
+            "name": "showError",
+            "kind": "function",
+            "line": 13,
+            "end_line": 13
+          },
+          {
+            "name": "showLoading",
+            "kind": "function",
+            "line": 18,
+            "end_line": 18
+          }
+        ],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.8,
+        "confidence": 0.9
+      },
+      {
+        "path": "index.html",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.1,
+        "confidence": 0.9
+      },
+      {
+        "path": "styles.css",
+        "kind": "source",
+        "language": "unknown",
+        "symbols": [],
+        "imports": [],
+        "exports": [],
+        "relationships": [],
+        "entrypoint_score": 0.0,
+        "confidence": 0.6
+      }
+    ],
+    "symbol_index": {
+      "files": [
+        {
+          "path": "main.js",
+          "language": "javascript",
+          "symbols": [
+            {
+              "name": "displayTemperature",
+              "kind": "function",
+              "line": 23,
+              "end_line": 23
+            },
+            {
+              "name": "fetchForecast",
+              "kind": "function",
+              "line": 30,
+              "end_line": 30
+            },
+            {
+              "name": "geocodeCity",
+              "kind": "function",
+              "line": 62,
+              "end_line": 62
+            },
+            {
+              "name": "resetMessages",
+              "kind": "function",
+              "line": 8,
+              "end_line": 8
+            },
+            {
+              "name": "showError",
+              "kind": "function",
+              "line": 13,
+              "end_line": 13
+            },
+            {
+              "name": "showLoading",
+              "kind": "function",
+              "line": 18,
+              "end_line": 18
+            }
+          ]
+        }
+      ],
+      "by_name": {
+        "displayTemperature": [
+          "main.js"
+        ],
+        "fetchForecast": [
+          "main.js"
+        ],
+        "geocodeCity": [
+          "main.js"
+        ],
+        "resetMessages": [
+          "main.js"
+        ],
+        "showError": [
+          "main.js"
+        ],
+        "showLoading": [
+          "main.js"
+        ]
+      }
+    },
+    "graph": {
+      "nodes": [
+        "README.md",
+        "main.js",
+        "index.html",
+        "styles.css"
+      ],
+      "edges": []
+    },
+    "dependency_graph": {
+      "dependencies": []
+    },
+    "entrypoints": [
+      {
+        "path": "main.js",
+        "score": 0.8,
+        "reasons": [
+          "known_entry_basename",
+          "entrypoint_like_name"
+        ],
+        "aliases": [
+          "index.html"
+        ]
+      },
+      {
+        "path": "index.html",
+        "score": 0.1,
+        "reasons": [
+          "entrypoint_like_name"
+        ],
+        "aliases": [
+          "main.js"
+        ]
+      }
+    ],
+    "entrypoint_aliases": {
+      "": [
+        "main.js",
+        "index.html"
+      ]
+    },
+    "tests": [],
+    "test_mappings": [],
+    "configs": [],
+    "toolchain": [],
+    "path_aliases": {},
+    "architecture_signals": [
+      {
+        "name": "unknown",
+        "confidence": 0.4
+      }
+    ],
+    "resolution_hints": {
+      "by_basename": {
+        "readme.md": [
+          "README.md"
+        ],
+        "main.js": [
+          "main.js"
+        ],
+        "index.html": [
+          "index.html"
+        ],
+        "styles.css": [
+          "styles.css"
+        ]
+      },
+      "entrypoint_candidates": [
+        {
+          "path": "main.js",
+          "score": 0.8
+        },
+        {
+          "path": "index.html",
+          "score": 0.1
+        }
+      ],
+      "entrypoint_aliases": {
+        "": [
+          "main.js",
+          "index.html"
+        ]
+      },
+      "ai_ranked_candidates": [
+        {
+          "path": "main.js",
+          "score": 0.8,
+          "reason": "ai_fallback_ranked"
+        },
+        {
+          "path": "index.html",
+          "score": 0.1,
+          "reason": "ai_fallback_ranked"
+        }
+      ]
+    }
+  }
+}
