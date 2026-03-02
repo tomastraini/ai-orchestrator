@@ -28,7 +28,10 @@ class ClaudeCodeCLIExecutorTests(unittest.TestCase):
             logs: list[str] = []
             with patch(
                 "services.execution.claude_cli_executor.subprocess.Popen",
-                return_value=_FakeProcess("line one\nline two\n", returncode=0),
+                side_effect=[
+                    _FakeProcess("preflight ok\n", returncode=0),
+                    _FakeProcess("line one\nline two\n", returncode=0),
+                ],
             ):
                 result = executor.execute_plan(
                     {"summary": "Do work", "project_ref": {"path_hint": "projects/sample"}},
@@ -41,6 +44,24 @@ class ClaudeCodeCLIExecutorTests(unittest.TestCase):
             self.assertTrue(any("line two" in item for item in logs))
             summary_path = Path(tmp) / ".orchestrator" / "runs" / "req-1" / "summary.json"
             self.assertTrue(summary_path.exists())
+
+    def test_preflight_auth_failure_returns_actionable_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            executor = ClaudeCodeCLIExecutor(repo_root=tmp)
+            with patch(
+                "services.execution.claude_cli_executor.subprocess.Popen",
+                return_value=_FakeProcess(
+                    'Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired"}}\n',
+                    returncode=1,
+                ),
+            ):
+                result = executor.execute_plan(
+                    {"summary": "Do work", "project_ref": {"path_hint": "projects/sample"}},
+                    request_id="req-auth-fail",
+                )
+            self.assertEqual(result["status"], "implementation_failed")
+            self.assertIn("preflight failed", result["final_summary"].lower())
+            self.assertIn("Run `claude login`", result.get("build_logs") or "")
 
 
 if __name__ == "__main__":

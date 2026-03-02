@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -20,6 +21,13 @@ class ClaudeCodeCLIExecutor:
     def __init__(self, repo_root: str) -> None:
         self.repo_root = repo_root
         self.default_timeout_seconds = int(os.getenv("CLAUDE_CODE_TIMEOUT_SECONDS", "1800"))
+        self.preflight_enabled = str(os.getenv("CLAUDE_CODE_PREFLIGHT_ENABLED", "true")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.preflight_prompt = str(os.getenv("CLAUDE_CODE_PREFLIGHT_PROMPT", "auth-check")).strip() or "auth-check"
 
     def execute_plan(
         self,
@@ -29,17 +37,53 @@ class ClaudeCodeCLIExecutor:
         log_sink: Optional[LogSinkFn] = None,
     ) -> Dict[str, Any]:
         started = time.time()
+        diagnostics = self._runtime_diagnostics()
         command = self._build_command(plan)
         cwd = self._resolve_cwd(plan)
 
         if callable(log_sink):
             log_sink(f"[EXEC] running Claude Code CLI in {cwd}")
             log_sink(f"[EXEC] command: {' '.join(command)}")
+            for line in diagnostics:
+                log_sink(line)
+
+        if self.preflight_enabled:
+            preflight_command = self._build_command(plan, prompt_override=self.preflight_prompt)
+            preflight = self._run_process(
+                preflight_command,
+                cwd=cwd,
+                timeout_seconds=min(self.default_timeout_seconds, 120),
+                log_sink=log_sink,
+            )
+            if preflight["exit_code"] != 0:
+                elapsed_ms = int((time.time() - started) * 1000)
+                hints = self._auth_failure_hints(preflight["logs"])
+                all_logs = diagnostics + ["[EXEC ERROR] preflight failed"] + preflight["logs"] + hints
+                self._persist_run_artifacts(
+                    request_id=request_id,
+                    status="implementation_failed",
+                    summary="Claude Code CLI preflight failed.",
+                    elapsed_ms=elapsed_ms,
+                    command=preflight_command,
+                    cwd=cwd,
+                    logs=all_logs,
+                    exit_code=preflight["exit_code"],
+                )
+                return {
+                    "branch_name": None,
+                    "build_logs": "\n".join(all_logs).strip() or None,
+                    "status": "implementation_failed",
+                    "final_summary": "Claude Code CLI preflight failed.",
+                    "exit_code": preflight["exit_code"],
+                }
 
         run_output = self._run_process(command, cwd=cwd, timeout_seconds=self.default_timeout_seconds, log_sink=log_sink)
         elapsed_ms = int((time.time() - started) * 1000)
         status = "completed" if run_output["exit_code"] == 0 else "implementation_failed"
         summary = "Claude Code CLI completed successfully." if status == "completed" else "Claude Code CLI failed."
+        logs_with_diagnostics = diagnostics + run_output["logs"]
+        if status != "completed":
+            logs_with_diagnostics += self._auth_failure_hints(run_output["logs"])
 
         self._persist_run_artifacts(
             request_id=request_id,
@@ -48,23 +92,23 @@ class ClaudeCodeCLIExecutor:
             elapsed_ms=elapsed_ms,
             command=command,
             cwd=cwd,
-            logs=run_output["logs"],
+            logs=logs_with_diagnostics,
             exit_code=run_output["exit_code"],
         )
 
         return {
             "branch_name": None,
-            "build_logs": "\n".join(run_output["logs"]).strip() or None,
+            "build_logs": "\n".join(logs_with_diagnostics).strip() or None,
             "status": status,
             "final_summary": summary,
             "exit_code": run_output["exit_code"],
         }
 
-    def _build_command(self, plan: Dict[str, Any]) -> List[str]:
+    def _build_command(self, plan: Dict[str, Any], *, prompt_override: Optional[str] = None) -> List[str]:
         base = str(os.getenv("CLAUDE_CODE_CMD", "claude")).strip() or "claude"
         args_raw = str(os.getenv("CLAUDE_CODE_ARGS", "--print")).strip()
         args = shlex.split(args_raw, posix=os.name != "nt") if args_raw else []
-        prompt = self._build_prompt(plan)
+        prompt = prompt_override if prompt_override is not None else self._build_prompt(plan)
         if "{prompt}" in " ".join(args):
             args = [arg.replace("{prompt}", prompt) for arg in args]
             return [base] + args
@@ -140,6 +184,27 @@ class ClaudeCodeCLIExecutor:
                 log_sink(timeout_msg)
             return {"exit_code": 124, "logs": logs}
         return {"exit_code": int(process.returncode or 0), "logs": logs}
+
+    def _runtime_diagnostics(self) -> List[str]:
+        cmd = str(os.getenv("CLAUDE_CODE_CMD", "claude")).strip() or "claude"
+        return [
+            f"[EXEC DIAG] python_executable={os.sys.executable}",
+            f"[EXEC DIAG] claude_cmd={cmd}",
+            f"[EXEC DIAG] claude_resolved_path={shutil.which(cmd) or 'NOT_FOUND'}",
+            f"[EXEC DIAG] HOME={os.getenv('HOME', '')}",
+            f"[EXEC DIAG] USERPROFILE={os.getenv('USERPROFILE', '')}",
+            f"[EXEC DIAG] CLAUDE_CODE_ARGS={os.getenv('CLAUDE_CODE_ARGS', '--print')}",
+        ]
+
+    def _auth_failure_hints(self, logs: List[str]) -> List[str]:
+        merged = "\n".join(logs).lower()
+        if "oauth token has expired" in merged or "authentication_error" in merged:
+            return [
+                "[EXEC HINT] Claude auth failed in non-interactive mode.",
+                "[EXEC HINT] Run `claude login` in the same shell/environment running orchestrator.",
+                "[EXEC HINT] Verify `claude --print \"ping\"` works in that same shell before retrying.",
+            ]
+        return []
 
     def _persist_run_artifacts(
         self,
