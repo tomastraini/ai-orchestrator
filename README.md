@@ -1,8 +1,17 @@
 # ai-orchestrator
 
+`ai-orchestrator` is a PM-first workflow that gathers requirements, produces an implementation-ready plan, and delegates implementation to Claude Code CLI.
+
+## Architecture
+
+- `PM` creates a strict plan contract (`services/pm/pm_service.py`)
+- `Orchestrator` handles plan approval and execution (`orchestrator.py`)
+- `Execution` invokes Claude Code CLI (`services/execution/claude_cli_executor.py`)
+- Run artifacts are written to `.orchestrator/runs/<request_id>/`
+
 ## Setup
 
-### 1) Create and activate a virtual environment
+### 1) Create and activate virtual environment
 
 Windows (PowerShell):
 
@@ -24,73 +33,49 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Optional cognition providers (recommended for better repository indexing precision):
+### 3) Configure environment
 
-```bash
-pip install -r requirements-cognition-optional.txt
-```
-
-These optional providers improve multi-language symbol/import graph quality and ranking confidence, but are not required for baseline orchestrator execution.
-
-### 3) Configure environment variables
-
-Required:
+Required for PM model calls:
 
 - `AZURE_OPENAI_KEY`
 
-Optional (defaults are provided in code):
+Optional:
 
-- `AZURE_OPENAI_ENDPOINT` (default: `https://fullstackdevclinigma.openai.azure.com`)
-- `AZURE_OPENAI_API_VERSION` (default: `2025-04-01-preview`)
-- `AZURE_OPENAI_DEPLOYMENT` (default: `gpt-5.1-codex-mini`)
+- `AZURE_OPENAI_ENDPOINT`
+- `AZURE_OPENAI_API_VERSION`
+- `AZURE_OPENAI_DEPLOYMENT`
 
-Windows (PowerShell):
+Required for execution:
+
+- `CLAUDE_CODE_CMD` (default: `claude`)
+- `CLAUDE_CODE_ARGS` (default: `--print`)
+- `CLAUDE_CODE_TIMEOUT_SECONDS` (default: `1800`)
+
+Example (PowerShell):
 
 ```powershell
 $env:AZURE_OPENAI_KEY="your-key"
-$env:AZURE_OPENAI_ENDPOINT="https://fullstackdevclinigma.openai.azure.com"
-$env:AZURE_OPENAI_API_VERSION="2025-04-01-preview"
-$env:AZURE_OPENAI_DEPLOYMENT="gpt-5.1-codex-mini"
+$env:CLAUDE_CODE_CMD="claude"
+$env:CLAUDE_CODE_ARGS="--print"
 ```
 
-Ubuntu:
+## Run
+
+Generate and execute plan:
 
 ```bash
-export AZURE_OPENAI_KEY="your-key"
-export AZURE_OPENAI_ENDPOINT="https://fullstackdevclinigma.openai.azure.com"
-export AZURE_OPENAI_API_VERSION="2025-04-01-preview"
-export AZURE_OPENAI_DEPLOYMENT="gpt-5.1-codex-mini"
+python orchestrator.py --mode full --requirement "Build a simple dashboard app"
 ```
 
-### 4) Run orchestrator
+Generate plan only:
 
 ```bash
-python orchestrator.py
+python orchestrator.py --mode plan --requirement "Build a simple dashboard app"
 ```
 
-## Ubuntu one-shot setup
-
-If you want a single copy/paste bootstrap for Ubuntu (venv + base deps + optional cognition deps + env vars), use the command in:
-
-- `autorun.txt`
-
-That command is intended for local developer setup convenience and can be adjusted to your preferred shell profile strategy.
-
-## Diagnostics
-
-Verify SDK version:
+Execute latest approved plan:
 
 ```bash
-python -c "import openai; print(openai.__version__)"
+python orchestrator.py --mode execute --from-latest
 ```
 
-Verify Azure client exposes Responses API:
-
-```bash
-python -c "from config import client; print(hasattr(client, 'responses'))"
-```
-
-If setup is incorrect, runtime errors should point to:
-
-- missing env vars in `config.py`
-- missing/old OpenAI SDK in `services/pm_service.py`

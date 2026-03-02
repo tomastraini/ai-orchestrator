@@ -6,7 +6,9 @@ from typing import List, Tuple
 
 
 FORBIDDEN_IMPORTS: List[Tuple[str, str]] = [
-    ("services/dev/dev_service.py", "from services.pm.dev_handoff_store import"),
+    ("orchestrator.py", "from services.dev"),
+    ("orchestrator.py", "DevService"),
+    ("services/pm/pm_service.py", "dev_handoff_store"),
 ]
 
 
@@ -38,7 +40,10 @@ def main() -> int:
                 print(f"[ARCH_GUARD][WARN] {message}")
 
     for rel, token in FORBIDDEN_IMPORTS:
-        content = (repo_root / rel).read_text(encoding="utf-8", errors="ignore")
+        target = repo_root / rel
+        if not target.exists():
+            continue
+        content = target.read_text(encoding="utf-8", errors="ignore")
         if token in content:
             failures.append(f"forbidden dependency still present: {rel}")
 
