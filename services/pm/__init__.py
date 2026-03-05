@@ -1,2 +1,0 @@
-"""PM domain package."""
-
