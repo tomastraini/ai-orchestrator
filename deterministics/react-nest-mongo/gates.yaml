@@ -1,0 +1,23 @@
+gates:
+  planner_to_builder:
+    required:
+      - plan_contract_valid
+      - target_files_identified
+    retry_budget: 1
+  builder_to_validator:
+    required:
+      - changes_applied
+      - worklog_emitted
+    retry_budget: 2
+  validator_to_finalizer:
+    required:
+      - tests_passed
+      - lint_passed
+      - acceptance_criteria_mapped
+    retry_budget: 2
+  finalizer_to_done:
+    required:
+      - audit_generated
+      - final_report_generated
+      - evidence_bundle_complete
+    retry_budget: 1

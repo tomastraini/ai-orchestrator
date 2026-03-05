@@ -1,0 +1,33 @@
+commands:
+  bootstrap:
+    - name: install-root
+      cwd: .
+      command: npm install
+      purpose: install monorepo dependencies
+  build:
+    - name: build-frontend
+      cwd: frontend
+      command: npm run build
+      purpose: compile react app
+    - name: build-backend
+      cwd: backend
+      command: npm run build
+      purpose: compile nestjs app
+  test:
+    - name: test-frontend
+      cwd: frontend
+      command: npm test -- --watch=false
+      purpose: frontend verification
+    - name: test-backend
+      cwd: backend
+      command: npm test
+      purpose: backend verification
+  lint:
+    - name: lint-frontend
+      cwd: frontend
+      command: npm run lint
+      purpose: frontend lint checks
+    - name: lint-backend
+      cwd: backend
+      command: npm run lint
+      purpose: backend lint checks

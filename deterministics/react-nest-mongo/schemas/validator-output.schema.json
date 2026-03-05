@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ValidatorOutput",
+  "type": "object",
+  "required": ["status", "checks", "acceptanceCriteria"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["passed", "failed"]
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": { "type": "string", "enum": ["passed", "failed"] },
+          "details": { "type": "string" }
+        }
+      }
+    },
+    "acceptanceCriteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["acId", "status"],
+        "properties": {
+          "acId": { "type": "string" },
+          "status": { "type": "string", "enum": ["passed", "failed"] },
+          "evidence": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

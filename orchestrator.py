@@ -7,6 +7,7 @@ import uuid
 from typing import Any, Dict
 
 from services.execution.claude_cli_executor import ClaudeCodeCLIExecutor
+from services.execution.openhands_runtime import OpenHandsRuntime
 from services.pm.project_resolver import (
     is_vague_existing_project_request,
     resolve_project_candidates,
@@ -144,7 +145,16 @@ def run(
         return 0
 
     print("[PHASE] execution")
-    executor = ClaudeCodeCLIExecutor(repo_root=repo_root)
+    fallback_to_claude = (
+        str(os.getenv("OPENHANDS_FALLBACK_TO_CLAUDE", "false")).strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    if fallback_to_claude:
+        print("[EXECUTION ENGINE] Claude fallback enabled")
+        executor: Any = ClaudeCodeCLIExecutor(repo_root=repo_root)
+    else:
+        print("[EXECUTION ENGINE] OpenHands runtime")
+        executor = OpenHandsRuntime(repo_root=repo_root)
 
     def _live_log_sink(line: str) -> None:
         print(line, flush=True)

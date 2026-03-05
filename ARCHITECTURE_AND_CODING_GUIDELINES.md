@@ -2,13 +2,11 @@
 
 ## Purpose
 
-This repository uses a PM-led architecture:
+This repository uses a PM-led, OpenHands-first architecture:
 
 - PM interprets requirements and emits a validated plan contract.
 - Orchestrator manages approval and runtime wiring.
-- Claude Code CLI performs implementation.
-
-The system no longer contains an internal DEV graph/orchestration module.
+- OpenHands dispatcher/minion runtime performs implementation and validation.
 
 ## Module Boundaries
 
@@ -24,22 +22,31 @@ The system no longer contains an internal DEV graph/orchestration module.
 
 ### Execution (`services/execution`)
 
-- Owns Claude CLI invocation, runtime logs, timeout/exit handling, and run artifact persistence.
+- Owns OpenHands invocation, dispatcher policy, stage transitions, timeout/exit handling, and run artifact persistence.
 - Must not depend on PM storage internals beyond the plan payload.
+
+### Deterministics (`deterministics`)
+
+- Owns stack-specific commands, gates, repo hints, prompts, and schema variants.
+- Core runtime must consume these through contracts, not hardcoded framework logic.
 
 ## Dependency Rules
 
 - Allowed: `orchestrator -> services.pm`, `orchestrator -> services.execution`
+- Allowed: `services.execution -> shared` contracts
 - Forbidden: any import from `services.dev.*`
 - Forbidden: PM importing execution runtime internals
 - Forbidden: execution importing PM context store internals
+- Forbidden: core/orchestrator importing stack-specific deterministic internals directly
 
 ## Security and Reliability Rules
 
 - Use `subprocess` with explicit argument lists (`shell=False`).
 - Enforce timeout on external CLI execution.
-- Persist machine-readable run metadata (`summary.json`) and textual logs (`cli_output.log`).
+- Enforce role-based tool policy checks before tool execution.
+- Persist machine-readable run metadata and immutable stage events.
 - Treat non-zero exit codes as failed execution status.
+- Include `request_id` and `correlation_id` in all audit artifacts.
 
 ## Coding Standards
 
@@ -51,7 +58,8 @@ The system no longer contains an internal DEV graph/orchestration module.
 ## Testing Standards
 
 - Unit tests for PM contract generation behavior.
-- Unit tests for executor process handling and artifact persistence.
+- Unit tests for OpenHands dispatcher, policy checks, and artifact persistence.
 - Orchestrator tests for `plan`, `full`, and `execute` mode behavior.
+- Integration tests for stage ordering, retry budget behavior, and resume semantics.
 - No tests should reference removed `services/dev` runtime.
 

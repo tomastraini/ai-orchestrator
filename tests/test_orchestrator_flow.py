@@ -37,7 +37,34 @@ class OrchestratorFlowTests(unittest.TestCase):
         },
         clear=False,
     )
-    def test_execute_mode_uses_latest_plan_with_claude_executor(self) -> None:
+    def test_execute_mode_uses_latest_plan_with_openhands_runtime(self) -> None:
+        import importlib
+
+        orch = importlib.import_module("orchestrator")
+        with (
+            patch.object(orch, "_ask_approval", return_value=True),
+            patch.object(orch, "_load_latest_plan", return_value=({"summary": "base"}, "req-0")),
+            patch.object(orch, "OpenHandsRuntime") as runtime_cls_mock,
+        ):
+            runtime_cls_mock.return_value.execute_plan.return_value = {
+                "status": "completed",
+                "build_logs": "ok",
+            }
+            rc = orch.run("", mode="execute", from_latest=True)
+            self.assertEqual(rc, 0)
+            runtime_cls_mock.return_value.execute_plan.assert_called_once()
+
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_OPENAI_KEY": "dummy",
+            "AZURE_OPENAI_ENDPOINT": "https://example.invalid",
+            "AZURE_OPENAI_API_VERSION": "2025-04-01-preview",
+            "OPENHANDS_FALLBACK_TO_CLAUDE": "true",
+        },
+        clear=False,
+    )
+    def test_execute_mode_supports_claude_fallback_toggle(self) -> None:
         import importlib
 
         orch = importlib.import_module("orchestrator")
